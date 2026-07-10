@@ -1,0 +1,729 @@
+/* ACC Telemetry Dashboard 前端：session/圈選擇 + 三張同步 uPlot 圖 + 區段表 */
+"use strict";
+
+const COLORS = {
+  a: "#3987e5", b: "#199e70",
+  ink: "#ffffff", ink2: "#c3c2b7", muted: "#898781",
+  grid: "#2c2c2a", baseline: "#383835",
+  loss: "#e66767", gain: "#0ca30c",
+};
+const SYNC_KEY = "acc-telemetry";
+
+const $ = (id) => document.getElementById(id);
+let charts = [];
+let currentZones = [];
+let mapState = null;       // {x, y, delta, bounds} 賽道地圖資料
+let syncingScale = false;  // 防止 x 軸縮放同步遞迴
+let lastData = null;       // 最近一次 /api/compare 的回應（重建圖表用）
+let speedMode = "overlay"; // "overlay" = 兩線疊圖, "diff" = 差值
+
+function zoomTo(startPct, endPct) {
+  if (!charts.length) return;
+  const padding = (endPct - startPct) * 0.3; // 前後多留 30% 脈絡
+  charts[0].setScale("x", { min: Math.max(0, startPct - padding),
+                            max: Math.min(100, endPct + padding) });
+}
+
+function fmtLap(ms) {
+  if (ms == null || ms <= 0) return "--:--.---";
+  const m = Math.floor(ms / 60000);
+  const s = Math.floor((ms % 60000) / 1000);
+  const milli = ms % 1000;
+  return `${m}:${String(s).padStart(2, "0")}.${String(milli).padStart(3, "0")}`;
+}
+
+async function fetchJSON(url, opts) {
+  const res = await fetch(url, opts);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || data.message || res.statusText);
+  return data;
+}
+
+/* ---------- 選單 ---------- */
+
+function sessionLabel(s) {
+  const base = s.label || `${s.track || "?"} · ${s.car_model || "?"}`;
+  return `#${s.session_id}  ${base} · ${s.lap_count} laps`;
+}
+
+async function init(keepSelection = false) {
+  const sessions = await fetchJSON("/api/sessions");
+  const withLaps = sessions.filter((s) => s.lap_count > 0);
+  if (!withLaps.length) {
+    $("dashboard").style.display = "none";
+    $("empty-state").style.display = "";
+    $("empty-state").textContent = "資料庫沒有圈次資料——按左上角「開始錄製」，進 ACC 跑幾圈。";
+    return;
+  }
+  const sel = $("session-select");
+  const prev = keepSelection ? sel.value : null;
+  sel.innerHTML = withLaps.map((s) =>
+    `<option value="${s.session_id}">${sessionLabel(s)}</option>`).join("");
+  const ids = withLaps.map((s) => String(s.session_id));
+  sel.value = prev && ids.includes(prev) ? prev : ids[ids.length - 1];
+  sel.onchange = () => loadSession(Number(sel.value));
+  await loadSession(Number(sel.value));
+}
+
+/* ---------- session 管理 ---------- */
+
+let deleteArmed = null;
+
+function setupSessionActions() {
+  $("rename-btn").onclick = () => {
+    const row = $("rename-row");
+    row.hidden = !row.hidden;
+    if (!row.hidden) $("rename-input").focus();
+  };
+  $("rename-save").onclick = async () => {
+    const id = $("session-select").value;
+    await fetchJSON(`/api/sessions/${id}/rename`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ label: $("rename-input").value }),
+    });
+    $("rename-row").hidden = true;
+    $("rename-input").value = "";
+    await init(true);
+  };
+  $("delete-btn").onclick = async () => {
+    const btn = $("delete-btn");
+    if (deleteArmed === null) {           // 第一次點：進入確認狀態
+      btn.textContent = "確認刪除？";
+      btn.classList.add("confirm");
+      deleteArmed = setTimeout(() => {
+        btn.textContent = "刪除";
+        btn.classList.remove("confirm");
+        deleteArmed = null;
+      }, 3000);
+      return;
+    }
+    clearTimeout(deleteArmed);
+    deleteArmed = null;
+    btn.textContent = "刪除";
+    btn.classList.remove("confirm");
+    const id = $("session-select").value;
+    await fetchJSON(`/api/sessions/${id}`, { method: "DELETE" });
+    await init();
+  };
+}
+
+/* ---------- 錄製控制 ---------- */
+
+let recordPoll = null;
+let lastLapsSaved = 0;
+
+function setRecordUI(st) {
+  const btn = $("record-btn");
+  const box = $("record-status");
+  if (st.phase === "waiting") {
+    btn.textContent = "■ 停止";
+    btn.classList.add("armed");
+    box.textContent = "等待 ACC 進入賽道…";
+  } else if (st.phase === "recording") {
+    btn.textContent = "■ 停止錄製";
+    btn.classList.add("armed");
+    box.innerHTML = `<span class="rec-dot"></span>REC  ${st.track || ""}\n` +
+      `Lap ${st.current_lap} @ ${st.spline_pct}% · ${st.current_time}\n` +
+      `已存 ${st.laps_saved} 圈${st.last_lap ? " · " + st.last_lap : ""}`;
+  } else if (st.phase === "error") {
+    btn.textContent = "● 開始錄製";
+    btn.classList.remove("armed");
+    box.textContent = "錄製錯誤：" + st.error;
+  } else {
+    btn.textContent = "● 開始錄製";
+    btn.classList.remove("armed");
+    box.textContent = st.message || "";
+  }
+}
+
+async function pollRecordStatus() {
+  const st = await fetchJSON("/api/record/status");
+  setRecordUI(st);
+  const active = st.phase === "waiting" || st.phase === "recording";
+  if (active) {
+    // 每存一圈就刷新 session/圈次清單
+    if ((st.laps_saved || 0) !== lastLapsSaved) {
+      lastLapsSaved = st.laps_saved || 0;
+      await init(true);
+    }
+    recordPoll = setTimeout(pollRecordStatus, 1000);
+  } else {
+    recordPoll = null;
+    if (lastLapsSaved > 0 || st.session_id) {
+      lastLapsSaved = 0;
+      await init(true);
+    }
+  }
+}
+
+function setupRecording() {
+  $("record-btn").onclick = async () => {
+    const st = await fetchJSON("/api/record/status");
+    if (st.phase === "waiting" || st.phase === "recording") {
+      await fetchJSON("/api/record/stop", { method: "POST" });
+      if (recordPoll) clearTimeout(recordPoll);
+      recordPoll = null;
+      await pollRecordStatus();
+    } else {
+      await fetchJSON("/api/record/start", { method: "POST" });
+      lastLapsSaved = 0;
+      pollRecordStatus();
+    }
+  };
+  pollRecordStatus();   // 啟動時同步一次（app 重開時錄製可能仍在跑）
+}
+
+async function loadSession(sessionId) {
+  const { laps, best_lap_id } = await fetchJSON(`/api/laps/${sessionId}`);
+  const complete = laps.filter((l) => l.is_complete);
+
+  const optHTML = (l) =>
+    `<option value="${l.lap_id}">Lap ${l.lap_number}  ${fmtLap(l.lap_time_ms)}${l.lap_id === best_lap_id ? " ★" : ""}${l.is_valid ? "" : " (無效)"}</option>`;
+  $("lap-a-select").innerHTML = complete.map(optHTML).join("");
+  $("lap-b-select").innerHTML = complete.map(optHTML).join("");
+
+  // 預設：A = 最快圈，B = 最近另一完整圈
+  const others = complete.filter((l) => l.lap_id !== best_lap_id);
+  const defaultA = best_lap_id ?? (complete[0] && complete[0].lap_id);
+  const defaultB = others.length ? others[others.length - 1].lap_id
+                                 : (complete[0] && complete[0].lap_id);
+
+  renderLapList(laps, best_lap_id);
+  renderLapTrend(laps, best_lap_id);
+  if (defaultA == null || defaultB == null || complete.length < 2) {
+    $("dashboard").style.display = "none";
+    $("empty-state").style.display = "";
+    $("empty-state").textContent = "此 session 完整圈不足兩圈，無法比較。";
+    return;
+  }
+  $("lap-a-select").value = String(defaultA);
+  $("lap-b-select").value = String(defaultB);
+  $("lap-a-select").onchange = compare;
+  $("lap-b-select").onchange = compare;
+  await compare();
+}
+
+function renderLapList(laps, bestId) {
+  const a = Number($("lap-a-select").value), b = Number($("lap-b-select").value);
+  $("lap-list").innerHTML = laps.map((l) => {
+    const badges = [];
+    if (l.lap_id === bestId) badges.push('<span class="badge best">BEST</span>');
+    if (!l.is_valid) badges.push('<span class="badge invalid">INV</span>');
+    if (!l.is_complete) badges.push('<span class="badge">PARTIAL</span>');
+    const cls = l.lap_id === a ? "is-a" : l.lap_id === b ? "is-b" : "";
+    return `<div class="lap-row ${cls}">
+      <span>Lap ${l.lap_number} · ${fmtLap(l.lap_time_ms)}</span>
+      <span class="badges">${badges.join("")}</span></div>`;
+  }).join("");
+}
+
+/* ---------- 圖表 ---------- */
+
+function zonesPlugin(withLabels = false) {
+  // 在資料層下方畫出「損失最大」煞車區段的灰底；withLabels 時標上區段編號
+  return {
+    hooks: {
+      drawClear: (u) => {
+        const worst = [...currentZones]
+          .sort((x, y) => Math.abs(y.time_lost_s) - Math.abs(x.time_lost_s))
+          .slice(0, 3);
+        const ctx = u.ctx;
+        ctx.save();
+        for (const z of worst) {
+          const x0 = u.valToPos(z.start_pct, "x", true);
+          const x1 = u.valToPos(z.end_pct, "x", true);
+          ctx.fillStyle = "rgba(137, 135, 129, 0.10)";
+          ctx.fillRect(x0, u.bbox.top, x1 - x0, u.bbox.height);
+          if (withLabels) {
+            ctx.fillStyle = COLORS.muted;
+            ctx.font = `${11 * devicePixelRatio}px system-ui`;
+            ctx.textAlign = "center";
+            ctx.fillText(`#${z.index}`, (x0 + x1) / 2,
+                         u.bbox.top + 13 * devicePixelRatio);
+          }
+        }
+        ctx.restore();
+      },
+    },
+  };
+}
+
+function axisOpts(labelSize) {
+  return {
+    stroke: COLORS.muted,
+    grid: { stroke: COLORS.grid, width: 1 },
+    ticks: { stroke: COLORS.baseline, width: 1 },
+    size: labelSize,
+    font: "11px system-ui",
+  };
+}
+
+function makeChart(elId, height, series, data, extra = {}) {
+  const el = $(elId);
+  el.innerHTML = "";
+  const opts = {
+    width: el.clientWidth || 800,
+    height,
+    scales: { x: { time: false } },
+    cursor: {
+      sync: { key: SYNC_KEY },
+      points: { size: 7 },
+    },
+    legend: { live: true },
+    series: [
+      { label: "位置%", value: (u, v) => (v == null ? "-" : v.toFixed(1) + "%") },
+      ...series,
+    ],
+    axes: [axisOpts(40), axisOpts(50)],
+    plugins: [zonesPlugin(elId === "chart-speed")],
+    hooks: {
+      setCursor: [(u) => drawMapCursor(u.cursor.idx)],
+      setScale: [(u, key) => {           // 拖曳縮放時同步所有圖的 x 軸
+        if (key !== "x" || syncingScale) return;
+        const { min, max } = u.scales.x;
+        if (min == null || max == null) return; // 圖表初始化中，勿廣播無效值
+        syncingScale = true;
+        try {
+          for (const c of charts) if (c !== u) c.setScale("x", { min, max });
+        } finally {
+          syncingScale = false;
+        }
+      }],
+    },
+    ...extra,
+  };
+  const chart = new uPlot(opts, data, el);
+  charts.push(chart);
+  return chart;
+}
+
+function destroyCharts() {
+  charts.forEach((c) => c.destroy());
+  charts = [];
+}
+
+function seriesPair(labelA, labelB, { dash, width = 1.2 } = {}) {
+  const v = (u, val) => (val == null ? "-" : val.toFixed(1));
+  return [
+    { label: labelA, stroke: COLORS.a, width, dash, value: v, points: { show: false } },
+    { label: labelB, stroke: COLORS.b, width, dash, value: v, points: { show: false } },
+  ];
+}
+
+/* ---------- 賽道地圖 ---------- */
+
+function renderMap(d) {
+  const card = $("map-card");
+  if (!d.map_x || !d.map_y) {
+    card.style.display = "none";
+    mapState = null;
+    return;
+  }
+  card.style.display = "";
+  const canvas = $("track-map");
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * devicePixelRatio;
+  canvas.height = rect.height * devicePixelRatio;
+
+  const xs = d.map_x, ys = d.map_y;
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const pad = 24 * devicePixelRatio;
+  const scale = Math.min(
+    (canvas.width - pad * 2) / (maxX - minX || 1),
+    (canvas.height - pad * 2) / (maxY - minY || 1));
+  const ox = (canvas.width - (maxX - minX) * scale) / 2;
+  const oy = (canvas.height - (maxY - minY) * scale) / 2;
+  const px = (i) => ox + (xs[i] - minX) * scale;
+  const py = (i) => canvas.height - (oy + (ys[i] - minY) * scale);
+
+  mapState = { px, py, n: xs.length, canvas };
+
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.lineWidth = 3.5 * devicePixelRatio;
+  ctx.lineCap = "round";
+  // 依局部 delta 斜率著色：紅 = B 在此路段損失，綠 = 賺，灰 = 打平
+  const TH = 0.004; // 每格 4ms 以內視為打平
+  for (let i = 1; i < xs.length; i++) {
+    const dd = d.delta_s[i] - d.delta_s[i - 1];
+    ctx.strokeStyle = dd > TH ? COLORS.loss : dd < -TH ? COLORS.gain : COLORS.baseline;
+    ctx.beginPath();
+    ctx.moveTo(px(i - 1), py(i - 1));
+    ctx.lineTo(px(i), py(i));
+    ctx.stroke();
+  }
+  // 起點標記
+  ctx.fillStyle = COLORS.ink2;
+  ctx.beginPath();
+  ctx.arc(px(0), py(0), 5 * devicePixelRatio, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.font = `${11 * devicePixelRatio}px system-ui`;
+  ctx.fillText("S/F", px(0) + 8 * devicePixelRatio, py(0) - 6 * devicePixelRatio);
+
+  mapState.base = ctx.getImageData(0, 0, canvas.width, canvas.height);
+}
+
+function drawMapCursor(idx) {
+  if (!mapState) return;
+  const { px, py, n, canvas, base } = mapState;
+  const ctx = canvas.getContext("2d");
+  ctx.putImageData(base, 0, 0);
+  if (idx == null || idx < 0 || idx >= n) return;
+  ctx.fillStyle = COLORS.ink;
+  ctx.strokeStyle = COLORS.a;
+  ctx.lineWidth = 3 * devicePixelRatio;
+  ctx.beginPath();
+  ctx.arc(px(idx), py(idx), 6 * devicePixelRatio, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+}
+
+/* ---------- 微分段 / 胎溫 / 圈速趨勢 ---------- */
+
+function renderMicrosectors(ms) {
+  const maxAbs = Math.max(0.02, ...ms.map((m) => Math.abs(m.delta_s)));
+  $("microsectors").innerHTML = ms.map((m) => {
+    const frac = Math.min(1, Math.abs(m.delta_s) / maxAbs);
+    const color = m.delta_s > 0.005 ? COLORS.loss : m.delta_s < -0.005 ? COLORS.gain : null;
+    const bg = color
+      ? `${color}${Math.round(40 + frac * 175).toString(16).padStart(2, "0")}`
+      : "";
+    return `<div class="ms" ${bg ? `style="background:${bg}"` : ""}
+      data-start="${m.start_pct}" data-end="${m.end_pct}"
+      data-tip="${m.start_pct}–${m.end_pct}%  ${m.delta_s >= 0 ? "+" : ""}${m.delta_s.toFixed(3)}s（點擊放大）"></div>`;
+  }).join("");
+  for (const cell of document.querySelectorAll("#microsectors .ms")) {
+    cell.onclick = () => zoomTo(Number(cell.dataset.start), Number(cell.dataset.end));
+  }
+}
+
+const TYRE_ORDER = [["FL", 0], ["FR", 1], ["RL", 2], ["RR", 3]];
+
+function tyreTempColor(t) {
+  if (t == null) return COLORS.muted;
+  if (t < 70) return COLORS.a;          // 過冷
+  if (t <= 90) return COLORS.gain;      // 工作區間
+  if (t <= 100) return "#c98500";       // 偏熱
+  return COLORS.loss;                   // 過熱
+}
+
+function renderTyres(d) {
+  const card = $("tyre-card");
+  if (!d.tyres_a && !d.tyres_b) { card.style.display = "none"; return; }
+  card.style.display = "";
+  for (const [id, ty] of [["tyres-a", d.tyres_a], ["tyres-b", d.tyres_b]]) {
+    $(id).innerHTML = ty
+      ? TYRE_ORDER.map(([w, i]) =>
+          `<div class="tyre-cell"><div class="w">${w}</div>
+           <div class="t" style="color:${tyreTempColor(ty.temp[i])}">${ty.temp[i].toFixed(0)}°</div>
+           <div class="p">${ty.pressure[i].toFixed(1)} psi</div></div>`).join("")
+      : '<div class="tyre-note">此圈無資料</div>';
+  }
+  $("tyre-note").textContent = "工作區間約 70–90°C（乾胎）";
+}
+
+function renderLapTrend(laps, bestId) {
+  const done = laps.filter((l) => l.is_complete && l.lap_time_ms);
+  if (done.length < 2) { $("lap-trend").innerHTML = ""; return; }
+  const times = done.map((l) => l.lap_time_ms);
+  const min = Math.min(...times), max = Math.max(...times);
+  $("lap-trend").innerHTML = done.map((l) => {
+    const h = max === min ? 100 : 30 + 70 * (l.lap_time_ms - min) / (max - min);
+    const cls = l.lap_id === bestId ? "best" : l.is_valid ? "" : "invalid";
+    return `<div class="bar ${cls}" style="height:${h.toFixed(0)}%"
+      data-tip="Lap ${l.lap_number} · ${fmtLap(l.lap_time_ms)}"></div>`;
+  }).join("");
+}
+
+async function compare() {
+  const a = $("lap-a-select").value, b = $("lap-b-select").value;
+  let d;
+  try {
+    d = await fetchJSON(`/api/compare?a=${a}&b=${b}`);
+  } catch (err) {
+    $("empty-state").style.display = "";
+    $("empty-state").textContent = "比較失敗：" + err.message;
+    $("dashboard").style.display = "none";
+    return;
+  }
+  $("empty-state").style.display = "none";
+  $("dashboard").style.display = "";
+  currentZones = d.zones;
+
+  // -- 統計磚
+  $("tile-a").textContent = fmtLap(d.lap_a.lap_time_ms);
+  $("tile-b").textContent = fmtLap(d.lap_b.lap_time_ms);
+  const td = $("tile-delta");
+  td.textContent = (d.total_delta_s >= 0 ? "+" : "") + d.total_delta_s.toFixed(3) + "s";
+  td.className = "tile-value " + (d.total_delta_s >= 0 ? "loss" : "gain");
+  const worst = [...d.zones].sort((x, y) => y.time_lost_s - x.time_lost_s)[0];
+  $("tile-worst").innerHTML = worst
+    ? `${worst.corner ? worst.corner.split(" (")[0] : "#" + worst.index} ` +
+      `<span class="sub">@ ${worst.start_pct}% · +${worst.time_lost_s.toFixed(2)}s</span>`
+    : "–";
+
+  // -- 圖表
+  lastData = d;
+  buildCharts(d);
+
+  renderMap(d);
+  renderMicrosectors(d.microsectors);
+  renderTyres(d);
+  renderZones(d.zones, worst);
+  resetCoach();   // 比較的圈變了，舊對話的 context 已失效
+  // 更新側欄圈次高亮
+  const sessionId = Number($("session-select").value);
+  const { laps, best_lap_id } = await fetchJSON(`/api/laps/${sessionId}`);
+  renderLapList(laps, best_lap_id);
+}
+
+function buildCharts(d) {
+  destroyCharts();
+  const x = d.grid_pct;
+
+  if (speedMode === "diff") {
+    const sd = d.speed_a.map((v, i) =>
+      v == null || d.speed_b[i] == null ? null : d.speed_b[i] - v);
+    const sneg = sd.map((v) => (v != null && v < 0 ? v : null));  // B 較慢
+    const spos = sd.map((v) => (v != null && v >= 0 ? v : null)); // B 較快
+    makeChart("chart-speed", 260, [
+      { label: "速度差 B−A", stroke: COLORS.ink2, width: 1.4,
+        value: (u, v) => (v == null ? "-" : (v >= 0 ? "+" : "") + v.toFixed(1)),
+        points: { show: false } },
+      { label: "B 較慢", stroke: "transparent", fill: "rgba(230,103,103,0.22)",
+        value: () => "", points: { show: false } },
+      { label: "B 較快", stroke: "transparent", fill: "rgba(12,163,12,0.22)",
+        value: () => "", points: { show: false } },
+    ], [x, sd, sneg, spos]);
+  } else {
+    makeChart("chart-speed", 260,
+      seriesPair(`A ${d.lap_a.label}`, `B ${d.lap_b.label}`),
+      [x, d.speed_a, d.speed_b]);
+  }
+
+  makeChart("chart-pedal", 190, [
+    ...seriesPair("油門 A", "油門 B"),
+    ...seriesPair("煞車 A", "煞車 B", { dash: [5, 4] }),
+  ], [x, d.throttle_a, d.throttle_b, d.brake_a, d.brake_b],
+    { scales: { x: { time: false }, y: { range: [0, 105] } } });
+
+  makeChart("chart-steering", 160,
+    seriesPair("方向盤 A", "方向盤 B"),
+    [x, d.steering_a, d.steering_b],
+    { scales: { x: { time: false }, y: { range: [-1.05, 1.05] } } });
+
+  const stepped = uPlot.paths && uPlot.paths.stepped
+    ? uPlot.paths.stepped({ align: 1 }) : undefined;
+  makeChart("chart-gear", 140, [
+    { label: "檔位 A", stroke: COLORS.a, width: 1.2, paths: stepped,
+      value: (u, v) => (v == null ? "-" : String(v)), points: { show: false } },
+    { label: "檔位 B", stroke: COLORS.b, width: 1.2, paths: stepped,
+      value: (u, v) => (v == null ? "-" : String(v)), points: { show: false } },
+  ], [x, d.gear_a, d.gear_b]);
+
+  const dpos = d.delta_s.map((v) => (v >= 0 ? v : null));
+  const dneg = d.delta_s.map((v) => (v < 0 ? v : null));
+  makeChart("chart-delta", 200, [
+    { label: "Δt", stroke: COLORS.ink2, width: 1.4,
+      value: (u, v) => (v == null ? "-" : (v >= 0 ? "+" : "") + v.toFixed(3) + "s"),
+      points: { show: false } },
+    { label: "落後", stroke: "transparent", fill: "rgba(230,103,103,0.18)",
+      value: () => "", points: { show: false } },
+    { label: "領先", stroke: "transparent", fill: "rgba(12,163,12,0.18)",
+      value: () => "", points: { show: false } },
+  ], [x, d.delta_s, dpos, dneg]);
+
+  // 建立時 layout 可能尚未定，補一次尺寸校正
+  requestAnimationFrame(() => {
+    for (const c of charts) {
+      const el = c.root.parentElement;
+      if (el.clientWidth && Math.abs(el.clientWidth - c.width) > 2) {
+        c.setSize({ width: el.clientWidth, height: c.height });
+      }
+    }
+  });
+}
+
+function setupSpeedMode() {
+  $("speed-mode").onclick = () => {
+    speedMode = speedMode === "overlay" ? "diff" : "overlay";
+    $("speed-mode").textContent = speedMode === "overlay" ? "顯示差值" : "顯示疊圖";
+    if (lastData) buildCharts(lastData);
+  };
+}
+
+function renderZones(zones, worst) {
+  const tbody = $("zones-table").querySelector("tbody");
+  tbody.innerHTML = [...zones]
+    .sort((x, y) => y.time_lost_s - x.time_lost_s)
+    .map((z) => {
+      const brakeDiff = (z.brake_on_a_pct != null && z.brake_on_b_pct != null)
+        ? z.brake_on_b_pct - z.brake_on_a_pct : null;
+      const brakeTxt = brakeDiff == null || Math.abs(brakeDiff) < 0.05 ? "≈同"
+        : `B ${brakeDiff < 0 ? "早" : "晚"} ${Math.abs(brakeDiff).toFixed(2)}%`;
+      const lostCls = z.time_lost_s > 0.03 ? "loss" : z.time_lost_s < -0.03 ? "gain" : "";
+      const ph = (v) => (v >= 0 ? "+" : "") + v.toFixed(2);
+      return `<tr class="${z === worst ? "worst" : ""}"
+        data-start="${z.start_pct}" data-end="${z.end_pct}" title="點擊放大此區段">
+        <td>${z.corner || "#" + z.index}</td>
+        <td>${z.start_pct}–${z.end_pct}%</td>
+        <td class="${lostCls}">${z.time_lost_s >= 0 ? "+" : ""}${z.time_lost_s.toFixed(3)}s</td>
+        <td>${ph(z.entry_loss_s)} / ${ph(z.exit_loss_s)}</td>
+        <td>${brakeTxt}</td>
+        <td>${z.min_speed_a} / ${z.min_speed_b} km/h</td>
+        <td>${z.exit_speed_a} / ${z.exit_speed_b} km/h</td>
+      </tr>`;
+    }).join("");
+  for (const row of tbody.querySelectorAll("tr")) {
+    row.onclick = () => zoomTo(Number(row.dataset.start), Number(row.dataset.end));
+  }
+}
+
+window.addEventListener("resize", () => {
+  for (const c of charts) {
+    const el = c.root.parentElement;
+    c.setSize({ width: el.clientWidth, height: c.height });
+  }
+});
+
+/* ---------- AI 教練 ---------- */
+
+let coachHistory = [];   // [{role, content}]，切換比較圈時清空
+let coachBusy = false;
+
+function coachAddMsg(role, text, cls = "") {
+  const div = document.createElement("div");
+  div.className = `coach-msg ${cls || role}`;
+  div.textContent = text;
+  $("coach-messages").appendChild(div);
+  $("coach-messages").scrollTop = $("coach-messages").scrollHeight;
+  return div;
+}
+
+function resetCoach() {
+  coachHistory = [];
+  $("coach-messages").innerHTML = "";
+  coachAddMsg("assistant",
+    "我看過這兩圈的遙測了。可以直接問我，或點下面的快速提問。", "assistant");
+}
+
+async function coachSend(text) {
+  text = text.trim();
+  if (!text || coachBusy) return;
+  coachBusy = true;
+  $("coach-send").disabled = true;
+  coachAddMsg("user", text);
+  coachHistory.push({ role: "user", content: text });
+  const thinking = coachAddMsg("assistant", "教練分析中…", "assistant thinking");
+  try {
+    const a = $("lap-a-select").value, b = $("lap-b-select").value;
+    const res = await fetch("/api/coach", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ a: Number(a), b: Number(b), messages: coachHistory }),
+    });
+    const data = await res.json();
+    thinking.remove();
+    if (!res.ok) {
+      coachAddMsg("assistant", data.error || "發生錯誤", "error");
+      coachHistory.pop();   // 失敗的問題不留在歷史裡
+    } else {
+      coachAddMsg("assistant", data.reply);
+      coachHistory.push({ role: "assistant", content: data.reply });
+    }
+  } catch (err) {
+    thinking.remove();
+    coachAddMsg("assistant", "連線失敗：" + err.message, "error");
+    coachHistory.pop();
+  } finally {
+    coachBusy = false;
+    $("coach-send").disabled = false;
+  }
+}
+
+function setupCoach() {
+  $("coach-send").onclick = () => {
+    const input = $("coach-input");
+    coachSend(input.value);
+    input.value = "";
+  };
+  $("coach-input").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.isComposing) {
+      coachSend(e.target.value);
+      e.target.value = "";
+    }
+  });
+  for (const btn of document.querySelectorAll("#coach-quick .quick-q")) {
+    btn.onclick = () => coachSend(btn.textContent);
+  }
+}
+
+/* ---------- 設定 ---------- */
+
+async function loadSettings() {
+  const s = await fetchJSON("/api/settings");
+  $("setting-model").value = s.coach_model;
+  const status = $("setting-key-status");
+  if (s.api_key_set) {
+    status.textContent = `已設定（${s.api_key_hint}）— 輸入新值可覆蓋`;
+  } else if (s.env_key_set) {
+    status.textContent = "使用環境變數 ANTHROPIC_API_KEY 中的金鑰";
+  } else {
+    status.textContent = "尚未設定。到 console.anthropic.com 取得 API 金鑰。";
+  }
+}
+
+function setupSettings() {
+  $("settings-btn").onclick = async () => {
+    const panel = $("settings-panel");
+    panel.hidden = !panel.hidden;
+    if (!panel.hidden) {
+      $("setting-result").textContent = "";
+      await loadSettings().catch(() => {});
+    }
+  };
+  $("setting-save").onclick = async () => {
+    const result = $("setting-result");
+    const body = { coach_model: $("setting-model").value };
+    const key = $("setting-api-key").value.trim();
+    if (key) body.api_key = key;           // 留空 = 不動既有金鑰
+    try {
+      await fetchJSON("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      $("setting-api-key").value = "";
+      result.className = "setting-status ok";
+      result.textContent = "已儲存";
+      await loadSettings().catch(() => {});
+    } catch (err) {
+      result.className = "setting-status err";
+      result.textContent = "儲存失敗：" + err.message;
+    }
+  };
+  $("setting-test").onclick = async () => {
+    const result = $("setting-result");
+    result.className = "setting-status";
+    result.textContent = "測試中…";
+    try {
+      const r = await fetchJSON("/api/settings/test", { method: "POST" });
+      result.className = "setting-status " + (r.ok ? "ok" : "err");
+      result.textContent = r.message;
+    } catch (err) {
+      result.className = "setting-status err";
+      result.textContent = "測試失敗：" + err.message;
+    }
+  };
+}
+
+setupSessionActions();
+setupRecording();
+setupSpeedMode();
+setupCoach();
+setupSettings();
+init().catch((err) => {
+  $("empty-state").textContent = "初始化失敗：" + err.message;
+});

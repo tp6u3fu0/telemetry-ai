@@ -1,0 +1,15 @@
+{
+  "track": "monza",
+  "game": "acc",
+  "comment": "spline 範圍由實際遙測（煞車區段偵測）校準；名稱為官方彎名",
+  "corners": [
+    { "numbers": "T1-T2",   "name": "Variante del Rettifilo", "start": 0.10, "end": 0.19 },
+    { "numbers": "T3",      "name": "Curva Grande",           "start": 0.19, "end": 0.30 },
+    { "numbers": "T4-T5",   "name": "Variante della Roggia",  "start": 0.31, "end": 0.39 },
+    { "numbers": "T6",      "name": "Lesmo 1",                "start": 0.40, "end": 0.455 },
+    { "numbers": "T7",      "name": "Lesmo 2",                "start": 0.455, "end": 0.53 },
+    { "numbers": "T8",      "name": "Curva del Serraglio",    "start": 0.55, "end": 0.62 },
+    { "numbers": "T8-T10",  "name": "Variante Ascari",        "start": 0.62, "end": 0.72 },
+    { "numbers": "T11",     "name": "Parabolica (Alboreto)",  "start": 0.83, "end": 0.93 }
+  ]
+}

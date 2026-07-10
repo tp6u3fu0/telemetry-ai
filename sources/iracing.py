@@ -44,6 +44,10 @@ class IRacingReader:
         self.ir = ir
         self._lat0 = None
         self._lon0 = None
+        # 航位推算狀態（iRacing 即時遙測沒有 Lat/Lon，用速度+朝向積分出軌跡）
+        self._dr_x = 0.0
+        self._dr_y = 0.0
+        self._dr_t = None
 
     def close(self) -> None:
         if not self._external:
@@ -62,6 +66,13 @@ class IRacingReader:
         except Exception:
             return False
 
+    def _freeze(self) -> None:
+        """凍結變數緩衝，避免讀到更新到一半的撕裂值（會造成 spline 亂跳）。"""
+        try:
+            self.ir.freeze_var_buffer_latest()
+        except Exception:
+            pass
+
     def _get(self, name, default=None):
         try:
             v = self.ir[name]
@@ -70,6 +81,7 @@ class IRacingReader:
             return default
 
     def read_physics(self) -> PhysicsSnapshot:
+        self._freeze()
         steer_max = self._get("SteeringWheelAngleMax", 0.0) or 0.0
         steer = self._get("SteeringWheelAngle", 0.0) or 0.0
         return PhysicsSnapshot(
@@ -92,15 +104,35 @@ class IRacingReader:
         )
 
     def _world_xy(self) -> tuple:
+        # GPS 路徑（部分 session 才有；0,0 視為無資料）
         lat = self._get("Lat")
         lon = self._get("Lon")
-        if lat is None or lon is None:
-            return 0.0, 0.0
-        if self._lat0 is None:
-            self._lat0, self._lon0 = lat, lon
-        x = math.radians(lon - self._lon0) * _EARTH_R * math.cos(math.radians(self._lat0))
-        y = math.radians(lat - self._lat0) * _EARTH_R
-        return x, y
+        if lat and lon:
+            if self._lat0 is None:
+                self._lat0, self._lon0 = lat, lon
+            x = math.radians(lon - self._lon0) * _EARTH_R * math.cos(math.radians(self._lat0))
+            y = math.radians(lat - self._lat0) * _EARTH_R
+            return x, y
+        return self._dead_reckon()
+
+    def _dead_reckon(self) -> tuple:
+        """VelocityX/Y（車身座標系）+ YawNorth 積分出世界軌跡。
+
+        一圈內的漂移約數公尺，畫地圖綽綽有餘。"""
+        t = self._get("SessionTime")
+        yaw = self._get("YawNorth")
+        vx = self._get("VelocityX")
+        vy = self._get("VelocityY")
+        if t is None or yaw is None or vx is None:
+            return self._dr_x, self._dr_y
+        if self._dr_t is not None:
+            dt = t - self._dr_t
+            if 0 < dt < 0.5:
+                vy = vy or 0.0
+                self._dr_x += (vx * math.sin(yaw) + vy * math.cos(yaw)) * dt  # 東向
+                self._dr_y += (vx * math.cos(yaw) - vy * math.sin(yaw)) * dt  # 北向
+        self._dr_t = t
+        return self._dr_x, self._dr_y
 
     def _session_type(self) -> int:
         try:
@@ -112,6 +144,7 @@ class IRacingReader:
             return 0
 
     def read_graphics(self) -> GraphicsSnapshot:
+        self._freeze()
         on_track = bool(self._get("IsOnTrack", False))
         surface = int(self._get("PlayerTrackSurface", _NOT_IN_WORLD)
                       if self._get("PlayerTrackSurface") is not None else _NOT_IN_WORLD)
@@ -139,7 +172,8 @@ class IRacingReader:
         track = car = player = ""
         sectors = 0
         try:
-            track = str(self.ir["WeekendInfo"]["TrackName"])
+            wk = self.ir["WeekendInfo"]
+            track = str(wk.get("TrackDisplayName") or wk.get("TrackName") or "")
         except Exception:
             pass
         try:

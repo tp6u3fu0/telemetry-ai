@@ -64,17 +64,31 @@ def load_lap(db: TelemetryDB, lap_id: int) -> LapTrace:
     row_keys = rows[0].keys()
     extra = {k: col(k) for k in V2_CHANNELS if k in row_keys}
 
-    # 清理 spline：真實資料圈首常殘留過線前的點（0.999...），圈尾可能已繞回 0.00x。
-    # 先「解捲」——往回跳超過半圈視為跨線，之後累加 +1——再平移讓圈的主體落在 [0,1)。
-    spline = cols["spline"].copy()
-    wraps = np.diff(spline) < -0.5
-    spline[1:] += np.cumsum(wraps).astype(float)
-    spline -= np.floor(np.median(spline))
+    # 清理 spline：
+    # 1) 真過線（>0.7 掉到 <0.3）→ 解捲 +1
+    # 2) 其他大跳（|Δ| > 0.05，正常取樣每步僅 ~0.0005）→ 撕裂讀取的雜訊點，丟棄
+    # 3) 最後平移讓圈的主體落在 [0,1)（處理圈首殘留的過線前樣本）
+    raw = cols["spline"]
+    spline = raw.copy()
+    keep = np.ones(len(raw), dtype=bool)
+    offset = 0.0
+    last = raw[0]
+    for i in range(1, len(raw)):
+        d = raw[i] - last
+        if d < -0.5 and last > 0.7 and raw[i] < 0.3:
+            offset += 1.0            # 真正跨越終點線
+            last = raw[i]
+        elif abs(d) > 0.05:
+            keep[i] = False          # 雜訊，不更新基準
+            continue
+        else:
+            last = raw[i]
+        spline[i] = raw[i] + offset
+    spline -= np.floor(np.median(spline[keep]))
 
-    # 解捲後仍須嚴格遞增才能內插（剔除殘餘抖動點）
-    keep = np.ones(len(spline), dtype=bool)
-    running_max = np.maximum.accumulate(spline)
-    keep[1:] = spline[1:] > running_max[:-1]
+    # 仍須嚴格遞增才能內插（剔除殘餘抖動點）
+    running_max = np.maximum.accumulate(np.where(keep, spline, -np.inf))
+    keep[1:] &= spline[1:] > running_max[:-1]
 
     return LapTrace(
         lap_id=lap_id,
@@ -108,9 +122,13 @@ def resample_to_grid(trace: LapTrace, grid: np.ndarray) -> dict:
 
 
 def common_grid(a: LapTrace, b: LapTrace, n: int = GRID_N) -> np.ndarray:
-    """兩圈 spline 範圍的交集網格（處理 partial lap 只有部分賽道的情況）。"""
-    lo = max(a.spline[0], b.spline[0])
-    hi = min(a.spline[-1], b.spline[-1])
+    """兩圈 spline 範圍的交集網格（處理 partial lap 只有部分賽道的情況）。
+
+    截止在 [0, 1]：圈界偵測延遲會讓圈尾帶到下一圈的樣本（解捲後 spline > 1），
+    那段不屬於本圈，納入會汙染 delta（例如最後一圈過線後收油滑行）。
+    """
+    lo = max(a.spline[0], b.spline[0], 0.0)
+    hi = min(a.spline[-1], b.spline[-1], 1.0)
     if hi - lo < 0.05:
         raise ValueError(f"兩圈的賽道範圍幾乎沒有重疊（{lo:.3f} ~ {hi:.3f}）")
     return np.linspace(lo, hi, n)

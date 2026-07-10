@@ -25,7 +25,10 @@ class FakeIR:
             "Gear": 4, "RPM": 6500.0,
             "SteeringWheelAngle": 0.3, "SteeringWheelAngleMax": 1.2,
             "LatAccel": 19.6133, "LongAccel": -9.80665,   # 2g / -1g
-            "Lat": 34.915, "Lon": 134.219,                # 岡山附近
+            # 注意：不放 Lat/Lon——真實 iRacing 即時遙測沒有它們，
+            # 地圖座標走航位推算（VelocityX/Y + YawNorth）
+            "SessionTime": 3600.0,
+            "VelocityX": 50.0, "VelocityY": 0.0, "YawNorth": 0.0,
             "LapDistPct": 0.25,
             "Lap": 3, "LapCompleted": 2,
             "LapCurrentLapTime": 45.678, "LapLastLapTime": 92.5,
@@ -34,7 +37,7 @@ class FakeIR:
             "PlayerTrackSurface": 3,       # onTrack
             "SessionNum": 0,
             "WeekendInfo": {"TrackName": "okayama full",
-                            "TrackDisplayName": "Okayama International Circuit"},
+                            "TrackDisplayName": "Okayama International"},
             "DriverInfo": {"DriverCarIdx": 5, "Drivers": [
                 {"CarIdx": 5, "CarScreenNameShort": "MX-5", "UserName": "Chen"},
                 {"CarIdx": 7, "CarScreenNameShort": "GR86", "UserName": "Other"},
@@ -76,12 +79,20 @@ def main() -> int:
     if not g.is_valid_lap:
         failures.append("onTrack 應為有效圈")
 
-    # 世界座標：第一筆為原點，往北 100m 應反映在 y
+    # 世界座標（航位推算）：以 50Hz 取樣節奏，朝北 50 m/s 前進 2 秒 → y +100m
     g0 = r.read_graphics()
-    fake.vars["Lat"] += 100 / 6371000 * 180 / math.pi
-    g1 = r.read_graphics()
+    for _ in range(100):
+        fake.vars["SessionTime"] += 0.02
+        g1 = r.read_graphics()
     if abs((g1.world_y - g0.world_y) - 100) > 1:
-        failures.append(f"GPS→公尺換算錯: dy={g1.world_y - g0.world_y}")
+        failures.append(f"航位推算錯: dy={g1.world_y - g0.world_y}")
+    # 朝東（yaw=90°）前進 1 秒 → x +50m
+    fake.vars["YawNorth"] = math.pi / 2
+    for _ in range(50):
+        fake.vars["SessionTime"] += 0.02
+        g2 = r.read_graphics()
+    if abs((g2.world_x - g1.world_x) - 50) > 1:
+        failures.append(f"航位推算 yaw 方向錯: dx={g2.world_x - g1.world_x}")
 
     # 出界 → 無效圈；NotInWorld 也無效
     fake.vars["PlayerTrackSurface"] = 0
@@ -90,7 +101,7 @@ def main() -> int:
     fake.vars["PlayerTrackSurface"] = 3
 
     s = r.read_static()
-    if s.track != "okayama full" or s.car_model != "MX-5" or s.player_name != "Chen":
+    if s.track != "Okayama International" or s.car_model != "MX-5" or s.player_name != "Chen":
         failures.append(f"static 錯: {s}")
     if s.sector_count != 3:
         failures.append(f"sector 數錯: {s.sector_count}")
@@ -101,22 +112,28 @@ def main() -> int:
     rec = LapRecorder(db, sid)
     lap_ms = 92_000
     fake.vars["LapCompleted"] = 0
+    fake.vars["LapLastLapTime"] = -1.0    # iRacing 常見：尚無官方圈速
     for t in range(0, lap_ms, 20):                     # 跑完第 1 圈
         fake.vars["SessionTick"] += 1
         fake.vars["LapCurrentLapTime"] = t / 1000
         fake.vars["LapDistPct"] = t / lap_ms
         rec.process_sample(r.read_physics(), r.read_graphics())
-    fake.vars["SessionTick"] += 1                       # 過線
+    # 過線：模擬 iRacing 的 LapCompleted 延遲 1.5 秒才遞增、
+    # LapLastLapTime 仍是 -1（我們的 fallback 要能自己推算圈速）
+    fake.vars["SessionTick"] += 1
     fake.vars["LapCompleted"] = 1
-    fake.vars["LapCurrentLapTime"] = 0.0
-    fake.vars["LapLastLapTime"] = lap_ms / 1000
-    fake.vars["LapDistPct"] = 0.0
+    fake.vars["LapCurrentLapTime"] = 1.5
+    fake.vars["LapDistPct"] = 1.5 / 92
     rec.process_sample(r.read_physics(), r.read_graphics())
     rec.finalize()
 
     laps = db.list_laps(sid)
-    if len(laps) < 1 or laps[0]["lap_time_ms"] != lap_ms or not laps[0]["is_valid"]:
+    if len(laps) < 1 or not laps[0]["is_valid"]:
         failures.append(f"iRacing 圈錄製錯: {[dict(l) for l in laps]}")
+    # fallback 圈速 = 最後緩衝點 91980 − 已進行 1500 = 90480ms（±一個取樣）
+    got = laps[0]["lap_time_ms"] or 0
+    if abs(got - (lap_ms - 20 - 1500)) > 50:
+        failures.append(f"圈速 fallback 推算錯: {got}")
     game = db.conn.execute("SELECT game FROM sessions WHERE session_id=?",
                            (sid,)).fetchone()["game"]
     if game != "iracing":

@@ -318,7 +318,10 @@ function seriesPair(labelA, labelB, { dash, width = 1.2 } = {}) {
 
 function renderMap(d) {
   const card = $("map-card");
-  if (!d.map_x || !d.map_y) {
+  const spanOK = d.map_x && d.map_y &&
+    (Math.max(...d.map_x) - Math.min(...d.map_x) > 10 ||
+     Math.max(...d.map_y) - Math.min(...d.map_y) > 10);
+  if (!spanOK) {   // 無座標通道，或座標沒有實際移動（舊資料全 0）
     card.style.display = "none";
     mapState = null;
     return;

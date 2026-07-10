@@ -68,6 +68,12 @@ def synth_lap(corners, dt_ms=20):
     points.insert(0, (0, 0.9993, VMAX, 1.0, 0.0, 0.0, 4, 7000, 600.0, -2.0, *tail))
     points.append((points[-1][0] + dt_ms, 0.0004, VMAX, 1.0, 0.0, 0.0, 4, 7000,
                    600.0, 2.0, *tail))
+    # 模擬撕裂讀取：圈中插入兩個 spline 亂跳的雜訊點（iRacing 實測出現過），
+    # loader 必須丟棄而不是當成過線解捲
+    mid = len(points) // 2
+    t_mid = points[mid][0]
+    points.insert(mid, (t_mid, 0.02, VMAX, 1.0, 0.0, 0.0, 4, 7000, 0.0, 0.0, *tail))
+    points.insert(mid, (t_mid - dt_ms, 0.97, VMAX, 1.0, 0.0, 0.0, 4, 7000, 0.0, 0.0, *tail))
     return lap_time_ms, points
 
 

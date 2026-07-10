@@ -53,9 +53,21 @@ class LapRecorder:
 
         # 圈界：completedLaps 遞增 → 關閉上一圈
         if gfx.completed_laps > self._prev_completed:
+            # 圈速來源：遊戲回報值優先；缺漏或明顯不合（iRacing 的
+            # LapLastLapTime 有時給 -1）時，用自己的時間軸推算——
+            # 緩衝最後一點的圈內時間 − 目前圈已進行時間 ≈ 上一圈圈速
+            reported = gfx.last_lap_time_ms or 0
+            est = (self._points[-1][0] - gfx.current_lap_time_ms
+                   if self._points else 0)
+            complete = not self._lap_partial
+            if complete and est > 5000 and (
+                    not reported or abs(reported - est) > 3000):
+                lap_time = est
+            else:
+                lap_time = reported or None
             self._close_lap(lap_number=self._prev_completed + 1,
-                            lap_time_ms=gfx.last_lap_time_ms or None,
-                            is_complete=not self._lap_partial)
+                            lap_time_ms=lap_time,
+                            is_complete=complete)
             self._prev_completed = gfx.completed_laps
             self._lap_partial = False
             self._lap_valid = True

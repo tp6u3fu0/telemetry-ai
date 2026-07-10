@@ -1,6 +1,7 @@
 """SQLite 儲存層：sessions / laps / telemetry_points 三張表。"""
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -39,6 +40,14 @@ CREATE TABLE IF NOT EXISTS telemetry_points (
 
 CREATE INDEX IF NOT EXISTS idx_points_lap ON telemetry_points(lap_id, t_ms);
 CREATE INDEX IF NOT EXISTS idx_laps_session ON laps(session_id, lap_number);
+
+CREATE TABLE IF NOT EXISTS coach_chats (
+    lap_a      INTEGER NOT NULL,
+    lap_b      INTEGER NOT NULL DEFAULT 0,   -- 0 = 單圈分析
+    updated_at TEXT NOT NULL,
+    messages   TEXT NOT NULL,                -- JSON: [{role, content}, ...]
+    PRIMARY KEY (lap_a, lap_b)
+);
 """
 
 # telemetry_points 的完整欄位順序（save_lap 的 points tuple 依此排列，
@@ -144,6 +153,29 @@ class TelemetryDB:
             "(SELECT lap_id FROM laps WHERE session_id = ?)", (session_id,))
         self.conn.execute("DELETE FROM laps WHERE session_id = ?", (session_id,))
         self.conn.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
+        self.conn.commit()
+
+    # -- AI 教練對話 --------------------------------------------------------
+
+    def get_chat(self, lap_a: int, lap_b: int = 0) -> list:
+        row = self.conn.execute(
+            "SELECT messages FROM coach_chats WHERE lap_a = ? AND lap_b = ?",
+            (lap_a, lap_b or 0)).fetchone()
+        return json.loads(row["messages"]) if row else []
+
+    def save_chat(self, lap_a: int, lap_b: int, messages: list) -> None:
+        self.conn.execute(
+            "INSERT INTO coach_chats (lap_a, lap_b, updated_at, messages) "
+            "VALUES (?, ?, ?, ?) ON CONFLICT(lap_a, lap_b) DO UPDATE SET "
+            "updated_at = excluded.updated_at, messages = excluded.messages",
+            (lap_a, lap_b or 0, datetime.now().isoformat(timespec="seconds"),
+             json.dumps(messages, ensure_ascii=False)))
+        self.conn.commit()
+
+    def delete_chat(self, lap_a: int, lap_b: int = 0) -> None:
+        self.conn.execute(
+            "DELETE FROM coach_chats WHERE lap_a = ? AND lap_b = ?",
+            (lap_a, lap_b or 0))
         self.conn.commit()
 
     def best_lap(self, session_id: int):

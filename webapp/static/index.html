@@ -76,13 +76,13 @@
 
     <div id="dashboard" style="display:none">
       <div class="tiles">
-        <div class="tile"><div class="tile-label"><span class="dot dot-a"></span>參考圈 A</div>
+        <div class="tile"><div class="tile-label" id="tile-a-label"><span class="dot dot-a"></span>參考圈 A</div>
           <div class="tile-value" id="tile-a">–</div></div>
-        <div class="tile"><div class="tile-label"><span class="dot dot-b"></span>比較圈 B</div>
+        <div class="tile"><div class="tile-label" id="tile-b-label"><span class="dot dot-b"></span>比較圈 B</div>
           <div class="tile-value" id="tile-b">–</div></div>
-        <div class="tile"><div class="tile-label">總差 (B−A)</div>
+        <div class="tile"><div class="tile-label" id="tile-delta-label">總差 (B−A)</div>
           <div class="tile-value" id="tile-delta">–</div></div>
-        <div class="tile"><div class="tile-label">最大損失</div>
+        <div class="tile"><div class="tile-label" id="tile-worst-label">最大損失</div>
           <div class="tile-value" id="tile-worst">–</div></div>
       </div>
 
@@ -133,18 +133,16 @@
       </section>
 
       <section class="chart-card">
-        <h2>煞車區段分析 <span class="unit">依損失排序，含出彎後直線</span></h2>
+        <h2 id="zones-title">煞車區段分析 <span class="unit">依損失排序，含出彎後直線</span></h2>
         <table class="zones" id="zones-table">
-          <thead><tr>
-            <th>彎道</th><th>位置</th><th>損失</th><th>進彎 / 出彎</th><th>煞車點差</th>
-            <th>彎中最低速 A / B</th><th>出口速度 A / B</th>
-          </tr></thead>
+          <thead><tr id="zones-head"></tr></thead>
           <tbody></tbody>
         </table>
       </section>
 
       <section class="chart-card coach-card">
-        <h2>AI 教練 <span class="unit">基於目前比較的兩圈遙測</span></h2>
+        <h2>AI 教練 <span class="unit" id="coach-subtitle">基於目前的遙測分析</span>
+          <button id="coach-clear" class="mini-btn inline">清除對話</button></h2>
         <div id="coach-messages" class="coach-messages"></div>
         <div class="coach-quick" id="coach-quick">
           <button class="mini-btn quick-q">這圈哪裡可以更快？</button>

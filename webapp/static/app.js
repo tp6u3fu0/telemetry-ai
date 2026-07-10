@@ -16,6 +16,8 @@ let mapState = null;       // {x, y, delta, bounds} 賽道地圖資料
 let syncingScale = false;  // 防止 x 軸縮放同步遞迴
 let lastData = null;       // 最近一次 /api/compare 的回應（重建圖表用）
 let speedMode = "overlay"; // "overlay" = 兩線疊圖, "diff" = 差值
+let isSingle = false;      // 單圈分析模式
+let coachCtx = { a: 0, b: 0 };  // 對話所屬的圈（b=0 表單圈）
 
 function zoomTo(startPct, endPct) {
   if (!charts.length) return;
@@ -184,20 +186,20 @@ async function loadSession(sessionId) {
   const optHTML = (l) =>
     `<option value="${l.lap_id}">Lap ${l.lap_number}  ${fmtLap(l.lap_time_ms)}${l.lap_id === best_lap_id ? " ★" : ""}${l.is_valid ? "" : " (無效)"}</option>`;
   $("lap-a-select").innerHTML = complete.map(optHTML).join("");
-  $("lap-b-select").innerHTML = complete.map(optHTML).join("");
+  $("lap-b-select").innerHTML =
+    '<option value="">— 單圈分析 —</option>' + complete.map(optHTML).join("");
 
-  // 預設：A = 最快圈，B = 最近另一完整圈
+  // 預設：A = 最快圈；B = 最近另一完整圈，只有一圈時進單圈分析
   const others = complete.filter((l) => l.lap_id !== best_lap_id);
   const defaultA = best_lap_id ?? (complete[0] && complete[0].lap_id);
-  const defaultB = others.length ? others[others.length - 1].lap_id
-                                 : (complete[0] && complete[0].lap_id);
+  const defaultB = others.length ? others[others.length - 1].lap_id : "";
 
   renderLapList(laps, best_lap_id);
   renderLapTrend(laps, best_lap_id);
-  if (defaultA == null || defaultB == null || complete.length < 2) {
+  if (defaultA == null) {
     $("dashboard").style.display = "none";
     $("empty-state").style.display = "";
-    $("empty-state").textContent = "此 session 完整圈不足兩圈，無法比較。";
+    $("empty-state").textContent = "此 session 沒有完整圈可分析。";
     return;
   }
   $("lap-a-select").value = String(defaultA);
@@ -228,9 +230,11 @@ function zonesPlugin(withLabels = false) {
   return {
     hooks: {
       drawClear: (u) => {
-        const worst = [...currentZones]
-          .sort((x, y) => Math.abs(y.time_lost_s) - Math.abs(x.time_lost_s))
-          .slice(0, 3);
+        const worst = isSingle
+          ? currentZones   // 單圈：全部區段都淡淡標出
+          : [...currentZones]
+              .sort((x, y) => Math.abs(y.time_lost_s) - Math.abs(x.time_lost_s))
+              .slice(0, 3);
         const ctx = u.ctx;
         ctx.save();
         for (const z of worst) {
@@ -316,7 +320,7 @@ function seriesPair(labelA, labelB, { dash, width = 1.2 } = {}) {
 
 /* ---------- 賽道地圖 ---------- */
 
-function renderMap(d) {
+function renderMap(d, single = false) {
   const card = $("map-card");
   const spanOK = d.map_x && d.map_y &&
     (Math.max(...d.map_x) - Math.min(...d.map_x) > 10 ||
@@ -326,9 +330,16 @@ function renderMap(d) {
     mapState = null;
     return;
   }
+  card.querySelector(".unit").textContent = single
+    ? "顏色 = 車速（深色快），游標連動" : "紅 = B 損失路段，游標連動";
   card.style.display = "";
   const canvas = $("track-map");
   const rect = canvas.getBoundingClientRect();
+  if (!rect.width || !rect.height) {   // 容器尚不可見（防禦，不讓地圖炸掉整個視圖）
+    card.style.display = "none";
+    mapState = null;
+    return;
+  }
   canvas.width = rect.width * devicePixelRatio;
   canvas.height = rect.height * devicePixelRatio;
 
@@ -350,15 +361,29 @@ function renderMap(d) {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.lineWidth = 3.5 * devicePixelRatio;
   ctx.lineCap = "round";
-  // 依局部 delta 斜率著色：紅 = B 在此路段損失，綠 = 賺，灰 = 打平
-  const TH = 0.004; // 每格 4ms 以內視為打平
-  for (let i = 1; i < xs.length; i++) {
-    const dd = d.delta_s[i] - d.delta_s[i - 1];
-    ctx.strokeStyle = dd > TH ? COLORS.loss : dd < -TH ? COLORS.gain : COLORS.baseline;
-    ctx.beginPath();
-    ctx.moveTo(px(i - 1), py(i - 1));
-    ctx.lineTo(px(i), py(i));
-    ctx.stroke();
+  if (single) {
+    // 單圈：以車速著色（淺→深藍）
+    const sMin = Math.min(...d.speed), sMax = Math.max(...d.speed);
+    const lerp = (a, b, t) => Math.round(a + (b - a) * t);
+    for (let i = 1; i < xs.length; i++) {
+      const t = sMax > sMin ? (d.speed[i] - sMin) / (sMax - sMin) : 0;
+      ctx.strokeStyle = `rgb(${lerp(158, 16, t)},${lerp(197, 66, t)},${lerp(244, 129, t)})`;
+      ctx.beginPath();
+      ctx.moveTo(px(i - 1), py(i - 1));
+      ctx.lineTo(px(i), py(i));
+      ctx.stroke();
+    }
+  } else {
+    // 比較：依局部 delta 斜率著色：紅 = B 在此路段損失，綠 = 賺，灰 = 打平
+    const TH = 0.004; // 每格 4ms 以內視為打平
+    for (let i = 1; i < xs.length; i++) {
+      const dd = d.delta_s[i] - d.delta_s[i - 1];
+      ctx.strokeStyle = dd > TH ? COLORS.loss : dd < -TH ? COLORS.gain : COLORS.baseline;
+      ctx.beginPath();
+      ctx.moveTo(px(i - 1), py(i - 1));
+      ctx.lineTo(px(i), py(i));
+      ctx.stroke();
+    }
   }
   // 起點標記
   ctx.fillStyle = COLORS.ink2;
@@ -415,11 +440,13 @@ function tyreTempColor(t) {
   return COLORS.loss;                   // 過熱
 }
 
-function renderTyres(d) {
+function renderTyres(tyres, single = false) {
   const card = $("tyre-card");
-  if (!d.tyres_a && !d.tyres_b) { card.style.display = "none"; return; }
+  if (!tyres.a && !tyres.b) { card.style.display = "none"; return; }
   card.style.display = "";
-  for (const [id, ty] of [["tyres-a", d.tyres_a], ["tyres-b", d.tyres_b]]) {
+  const colB = $("tyres-b").parentElement;
+  colB.style.display = single ? "none" : "";
+  for (const [id, ty] of [["tyres-a", tyres.a], ["tyres-b", tyres.b]]) {
     $(id).innerHTML = ty
       ? TYRE_ORDER.map(([w, i]) =>
           `<div class="tyre-cell"><div class="w">${w}</div>
@@ -444,22 +471,48 @@ function renderLapTrend(laps, bestId) {
 }
 
 async function compare() {
-  const a = $("lap-a-select").value, b = $("lap-b-select").value;
-  let d;
+  // 圈選擇變更的進入點：B 為空 = 單圈分析
+  const a = Number($("lap-a-select").value);
+  const bRaw = $("lap-b-select").value;
+  isSingle = bRaw === "";
+  // 先顯示 dashboard 再渲染：地圖 canvas 需要量得到實際尺寸
+  $("empty-state").style.display = "none";
+  $("dashboard").style.display = "";
+  setSingleUI(isSingle);
   try {
-    d = await fetchJSON(`/api/compare?a=${a}&b=${b}`);
+    if (isSingle) await singleView(a);
+    else await compareView(a, Number(bRaw));
   } catch (err) {
     $("empty-state").style.display = "";
-    $("empty-state").textContent = "比較失敗：" + err.message;
+    $("empty-state").textContent = "載入失敗：" + err.message;
     $("dashboard").style.display = "none";
     return;
   }
-  $("empty-state").style.display = "none";
-  $("dashboard").style.display = "";
+  await loadChat(a, isSingle ? 0 : Number(bRaw));
+  // 更新側欄圈次高亮
+  const sessionId = Number($("session-select").value);
+  const { laps, best_lap_id } = await fetchJSON(`/api/laps/${sessionId}`);
+  renderLapList(laps, best_lap_id);
+}
+
+function setSingleUI(single) {
+  $("microsectors").closest(".chart-card").style.display = single ? "none" : "";
+  $("chart-delta").closest(".chart-card").style.display = single ? "none" : "";
+  $("speed-mode").style.display = single ? "none" : "";
+  $("coach-subtitle").textContent =
+    single ? "基於這一圈的遙測分析" : "基於目前比較的兩圈遙測";
+}
+
+async function compareView(a, b) {
+  const d = await fetchJSON(`/api/compare?a=${a}&b=${b}`);
   currentZones = d.zones;
 
-  // -- 統計磚
+  $("tile-a-label").innerHTML = '<span class="dot dot-a"></span>參考圈 A';
+  $("tile-b-label").innerHTML = '<span class="dot dot-b"></span>比較圈 B';
+  $("tile-delta-label").textContent = "總差 (B−A)";
+  $("tile-worst-label").textContent = "最大損失";
   $("tile-a").textContent = fmtLap(d.lap_a.lap_time_ms);
+  $("tile-a").className = "tile-value";
   $("tile-b").textContent = fmtLap(d.lap_b.lap_time_ms);
   const td = $("tile-delta");
   td.textContent = (d.total_delta_s >= 0 ? "+" : "") + d.total_delta_s.toFixed(3) + "s";
@@ -470,19 +523,35 @@ async function compare() {
       `<span class="sub">@ ${worst.start_pct}% · +${worst.time_lost_s.toFixed(2)}s</span>`
     : "–";
 
-  // -- 圖表
   lastData = d;
   buildCharts(d);
-
-  renderMap(d);
+  renderMap(d, false);
   renderMicrosectors(d.microsectors);
-  renderTyres(d);
+  renderTyres({ a: d.tyres_a, b: d.tyres_b }, false);
   renderZones(d.zones, worst);
-  resetCoach();   // 比較的圈變了，舊對話的 context 已失效
-  // 更新側欄圈次高亮
-  const sessionId = Number($("session-select").value);
-  const { laps, best_lap_id } = await fetchJSON(`/api/laps/${sessionId}`);
-  renderLapList(laps, best_lap_id);
+}
+
+async function singleView(a) {
+  const d = await fetchJSON(`/api/lap?id=${a}`);
+  currentZones = d.zones;
+
+  $("tile-a-label").innerHTML = '<span class="dot dot-a"></span>圈速';
+  $("tile-b-label").textContent = "極速";
+  $("tile-delta-label").textContent = "全圈最低速";
+  $("tile-worst-label").textContent = "煞車區段";
+  $("tile-a").textContent = fmtLap(d.lap.lap_time_ms);
+  $("tile-a").className = "tile-value " + (d.lap.is_valid ? "" : "loss");
+  $("tile-b").textContent = `${d.top_speed} km/h`;
+  const td = $("tile-delta");
+  td.textContent = `${d.min_speed} km/h`;
+  td.className = "tile-value";
+  $("tile-worst").innerHTML = `${d.zones.length} <span class="sub">個</span>`;
+
+  lastData = null;
+  buildSingleCharts(d);
+  renderMap(d, true);
+  renderTyres({ a: d.tyres, b: null }, true);
+  renderZonesSingle(d.zones);
 }
 
 function buildCharts(d) {
@@ -556,11 +625,80 @@ function setupSpeedMode() {
   $("speed-mode").onclick = () => {
     speedMode = speedMode === "overlay" ? "diff" : "overlay";
     $("speed-mode").textContent = speedMode === "overlay" ? "顯示差值" : "顯示疊圖";
-    if (lastData) buildCharts(lastData);
+    if (lastData && !isSingle) buildCharts(lastData);
   };
 }
 
+function buildSingleCharts(d) {
+  destroyCharts();
+  const x = d.grid_pct;
+  const v = (u, val) => (val == null ? "-" : val.toFixed(1));
+
+  makeChart("chart-speed", 260, [
+    { label: d.lap.label, stroke: COLORS.a, width: 1.2, value: v,
+      points: { show: false } },
+  ], [x, d.speed]);
+
+  makeChart("chart-pedal", 190, [
+    { label: "油門", stroke: COLORS.a, width: 1.2, value: v, points: { show: false } },
+    { label: "煞車", stroke: COLORS.loss, width: 1.2, dash: [5, 4], value: v,
+      points: { show: false } },
+  ], [x, d.throttle, d.brake],
+    { scales: { x: { time: false }, y: { range: [0, 105] } } });
+
+  makeChart("chart-steering", 160, [
+    { label: "方向盤", stroke: COLORS.a, width: 1.2, value: v, points: { show: false } },
+  ], [x, d.steering],
+    { scales: { x: { time: false }, y: { range: [-1.05, 1.05] } } });
+
+  const stepped = uPlot.paths && uPlot.paths.stepped
+    ? uPlot.paths.stepped({ align: 1 }) : undefined;
+  makeChart("chart-gear", 140, [
+    { label: "檔位", stroke: COLORS.a, width: 1.2, paths: stepped,
+      value: (u, val) => (val == null ? "-" : String(val)), points: { show: false } },
+  ], [x, d.gear]);
+
+  requestAnimationFrame(() => {
+    for (const c of charts) {
+      const el = c.root.parentElement;
+      if (el.clientWidth && Math.abs(el.clientWidth - c.width) > 2) {
+        c.setSize({ width: el.clientWidth, height: c.height });
+      }
+    }
+  });
+}
+
+function bindZoneRowClicks(tbody) {
+  for (const row of tbody.querySelectorAll("tr")) {
+    row.onclick = () => zoomTo(Number(row.dataset.start), Number(row.dataset.end));
+  }
+}
+
+function renderZonesSingle(zones) {
+  $("zones-title").innerHTML =
+    '煞車區段 <span class="unit">單圈絕對數據，依賽道順序（點擊列可放大）</span>';
+  $("zones-head").innerHTML =
+    "<th>彎道</th><th>位置</th><th>煞車點</th><th>入彎速度</th>" +
+    "<th>彎中最低速</th><th>出口速度</th>";
+  const tbody = $("zones-table").querySelector("tbody");
+  tbody.innerHTML = zones.map((z) => `<tr
+      data-start="${z.start_pct}" data-end="${z.end_pct}" title="點擊放大此區段">
+      <td>${z.corner || "#" + z.index}</td>
+      <td>${z.start_pct}–${z.end_pct}%</td>
+      <td>${z.brake_on_pct}%</td>
+      <td>${z.entry_speed} km/h</td>
+      <td>${z.min_speed} km/h</td>
+      <td>${z.exit_speed} km/h</td>
+    </tr>`).join("");
+  bindZoneRowClicks(tbody);
+}
+
 function renderZones(zones, worst) {
+  $("zones-title").innerHTML =
+    '煞車區段分析 <span class="unit">依損失排序，含出彎後直線</span>';
+  $("zones-head").innerHTML =
+    "<th>彎道</th><th>位置</th><th>損失</th><th>進彎 / 出彎</th><th>煞車點差</th>" +
+    "<th>彎中最低速 A / B</th><th>出口速度 A / B</th>";
   const tbody = $("zones-table").querySelector("tbody");
   tbody.innerHTML = [...zones]
     .sort((x, y) => y.time_lost_s - x.time_lost_s)
@@ -582,9 +720,7 @@ function renderZones(zones, worst) {
         <td>${z.exit_speed_a} / ${z.exit_speed_b} km/h</td>
       </tr>`;
     }).join("");
-  for (const row of tbody.querySelectorAll("tr")) {
-    row.onclick = () => zoomTo(Number(row.dataset.start), Number(row.dataset.end));
-  }
+  bindZoneRowClicks(tbody);
 }
 
 window.addEventListener("resize", () => {
@@ -608,11 +744,27 @@ function coachAddMsg(role, text, cls = "") {
   return div;
 }
 
-function resetCoach() {
-  coachHistory = [];
-  $("coach-messages").innerHTML = "";
+function coachGreeting() {
   coachAddMsg("assistant",
-    "我看過這兩圈的遙測了。可以直接問我，或點下面的快速提問。", "assistant");
+    isSingle
+      ? "我看過這一圈的遙測了。單圈沒有參考圈可比，但煞車點與各彎速度都在——可以直接問我。"
+      : "我看過這兩圈的遙測了。可以直接問我，或點下面的快速提問。");
+}
+
+async function loadChat(a, b) {
+  coachCtx = { a, b: b || 0 };
+  $("coach-messages").innerHTML = "";
+  let messages = [];
+  try {
+    const h = await fetchJSON(`/api/coach/history?a=${a}&b=${b || 0}`);
+    messages = h.messages || [];
+  } catch (err) { /* 歷史載入失敗不影響使用 */ }
+  coachHistory = messages;
+  if (messages.length) {
+    for (const m of messages) coachAddMsg(m.role, m.content);
+  } else {
+    coachGreeting();
+  }
 }
 
 async function coachSend(text) {
@@ -624,11 +776,11 @@ async function coachSend(text) {
   coachHistory.push({ role: "user", content: text });
   const thinking = coachAddMsg("assistant", "教練分析中…", "assistant thinking");
   try {
-    const a = $("lap-a-select").value, b = $("lap-b-select").value;
     const res = await fetch("/api/coach", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ a: Number(a), b: Number(b), messages: coachHistory }),
+      body: JSON.stringify({ a: coachCtx.a, b: coachCtx.b || null,
+                             messages: coachHistory }),
     });
     const data = await res.json();
     thinking.remove();
@@ -664,6 +816,16 @@ function setupCoach() {
   for (const btn of document.querySelectorAll("#coach-quick .quick-q")) {
     btn.onclick = () => coachSend(btn.textContent);
   }
+  $("coach-clear").onclick = async () => {
+    if (coachBusy) return;
+    try {
+      await fetchJSON(`/api/coach/history?a=${coachCtx.a}&b=${coachCtx.b || 0}`,
+                      { method: "DELETE" });
+    } catch (err) { /* 沒有歷史也沒關係 */ }
+    coachHistory = [];
+    $("coach-messages").innerHTML = "";
+    coachGreeting();
+  };
 }
 
 /* ---------- 設定 ---------- */

@@ -17,6 +17,7 @@ from agent import coach
 from analysis.compare import compare_laps, microsectors, summarize, tyre_summary
 from analysis.corners import annotate_zones, load_corners
 from analysis.loader import load_lap
+from analysis.single import analyze_lap, summarize_single
 from data_store.db import TelemetryDB
 
 from .config import load_config, save_config
@@ -67,6 +68,65 @@ def _compare_with_context(db: TelemetryDB, lap_a: int, lap_b: int):
                            session["track"] if session else "")
     corner_names = annotate_zones(comp.zones, corners)
     return comp, corner_names, session
+
+
+def _single_with_context(db: TelemetryDB, lap_id: int):
+    trace = load_lap(db, lap_id)
+    analysis = analyze_lap(trace)
+    session = db.conn.execute(
+        "SELECT * FROM sessions WHERE session_id = ?",
+        (trace.session_id,)).fetchone()
+    corners = load_corners(session["game"] if session else "acc",
+                           session["track"] if session else "")
+    corner_names = annotate_zones(analysis.zones, corners)
+    return analysis, corner_names, session
+
+
+@app.get("/api/lap")
+def api_lap():
+    lap_id = request.args.get("id", type=int)
+    if lap_id is None:
+        return jsonify({"error": "需要 id"}), 400
+    db = _db()
+    try:
+        try:
+            a, corner_names, _ = _single_with_context(db, lap_id)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+        def arr(x):
+            v = np.round(np.asarray(x, dtype=float), 4)
+            return [None if np.isnan(val) else float(val) for val in v]
+
+        t = a.trace
+        return jsonify({
+            "lap": {"lap_id": lap_id, "label": t.label,
+                    "lap_time_ms": t.lap_time_ms, "is_valid": t.is_valid},
+            "grid_pct": arr(a.grid * 100),
+            "speed": arr(a.ch["speed"]),
+            "throttle": arr(a.ch["throttle"] * 100),
+            "brake": arr(a.ch["brake"] * 100),
+            "steering": arr(a.ch["steering"]),
+            "gear": arr(a.ch["gear"]),
+            "top_speed": round(a.top_speed),
+            "min_speed": round(a.min_speed),
+            "map_x": arr(a.ch["world_x"]) if "world_x" in a.ch else None,
+            "map_y": arr(a.ch["world_y"]) if "world_y" in a.ch else None,
+            "zones": [{
+                "index": z.index,
+                "corner": corner_names.get(z.index),
+                "start_pct": round(z.start * 100, 1),
+                "end_pct": round(z.end * 100, 1),
+                "brake_on_pct": round(z.brake_on * 100, 2),
+                "entry_speed": round(z.entry_speed),
+                "min_speed": round(z.min_speed),
+                "exit_speed": round(z.exit_speed),
+            } for z in a.zones],
+            "tyres": tyre_summary(a.ch),
+            "summary": summarize_single(a, corner_names),
+        })
+    finally:
+        db.close()
 
 
 @app.get("/api/compare")
@@ -135,41 +195,74 @@ def api_compare():
 
 @app.post("/api/coach")
 def api_coach():
-    """AI 教練對話。body: {a, b, messages: [{role, content}...]}"""
+    """AI 教練對話。body: {a, b?, messages}。b 省略 = 單圈分析。成功後自動存檔。"""
     if not coach.has_credentials():
         return jsonify({"error": "尚未設定 Claude API 金鑰。"
                                  "點左上角 ⚙ 設定即可，不需重啟。"}), 503
     body = request.get_json(silent=True) or {}
     lap_a, lap_b = body.get("a"), body.get("b")
     messages = body.get("messages") or []
-    if not lap_a or not lap_b or not messages:
-        return jsonify({"error": "需要 a、b 與 messages"}), 400
+    if not lap_a or not messages:
+        return jsonify({"error": "需要 a 與 messages"}), 400
 
     db = _db()
     try:
         try:
-            comp, corner_names, session = _compare_with_context(db, lap_a, lap_b)
+            if lap_b:
+                comp, corner_names, session = _compare_with_context(db, lap_a, lap_b)
+                summary = summarize(comp, corner_names)
+            else:
+                analysis, corner_names, session = _single_with_context(db, lap_a)
+                summary = summarize_single(analysis, corner_names)
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
         system_blocks = coach.build_context(
-            summary=summarize(comp, corner_names),
+            summary=summary,
             track=session["track"] if session else "",
             car=session["car_model"] if session else "",
         )
+        try:
+            reply = coach.ask(system_blocks, messages)
+        except anthropic.AuthenticationError:
+            return jsonify({"error": "API 金鑰無效，請到 ⚙ 設定檢查。"}), 401
+        except anthropic.RateLimitError:
+            return jsonify({"error": "API 速率限制，稍後再試。"}), 429
+        except anthropic.APIStatusError as exc:
+            return jsonify({"error": f"Claude API 錯誤（{exc.status_code}）"}), 502
+        except anthropic.APIConnectionError:
+            return jsonify({"error": "無法連線到 Claude API，請檢查網路。"}), 502
+        db.save_chat(lap_a, lap_b or 0,
+                     messages + [{"role": "assistant", "content": reply}])
+        return jsonify({"reply": reply})
     finally:
         db.close()
 
+
+@app.get("/api/coach/history")
+def api_coach_history():
+    lap_a = request.args.get("a", type=int)
+    lap_b = request.args.get("b", type=int) or 0
+    if not lap_a:
+        return jsonify({"error": "需要 a"}), 400
+    db = _db()
     try:
-        reply = coach.ask(system_blocks, messages)
-    except anthropic.AuthenticationError:
-        return jsonify({"error": "API 金鑰無效，請檢查 ANTHROPIC_API_KEY。"}), 401
-    except anthropic.RateLimitError:
-        return jsonify({"error": "API 速率限制，稍後再試。"}), 429
-    except anthropic.APIStatusError as exc:
-        return jsonify({"error": f"Claude API 錯誤（{exc.status_code}）"}), 502
-    except anthropic.APIConnectionError:
-        return jsonify({"error": "無法連線到 Claude API，請檢查網路。"}), 502
-    return jsonify({"reply": reply})
+        return jsonify({"messages": db.get_chat(lap_a, lap_b)})
+    finally:
+        db.close()
+
+
+@app.delete("/api/coach/history")
+def api_coach_history_delete():
+    lap_a = request.args.get("a", type=int)
+    lap_b = request.args.get("b", type=int) or 0
+    if not lap_a:
+        return jsonify({"error": "需要 a"}), 400
+    db = _db()
+    try:
+        db.delete_chat(lap_a, lap_b)
+        return jsonify({"ok": True})
+    finally:
+        db.close()
 
 
 @app.delete("/api/sessions/<int:session_id>")

@@ -1,6 +1,6 @@
-"""App 內錄製服務：在背景 thread 跑 shared memory 取樣 + LapRecorder。
+"""App 內錄製服務：背景 thread 取樣 + LapRecorder，支援多遊戲自動偵測。
 
-狀態機：idle → waiting（等 ACC 進賽道）→ recording → idle
+狀態機：idle → waiting（等任一支援的遊戲進賽道）→ recording → idle
 UI 以 /api/record/status 輪詢 status dict（單 writer、讀取靠 GIL，夠用）。
 """
 from __future__ import annotations
@@ -10,8 +10,8 @@ import time
 
 from data_store.db import TelemetryDB
 from data_store.recorder import LapRecorder
+from sources import detect_live, open_all
 from telemetry_listener.live_console import format_laptime
-from telemetry_listener.shared_memory import SharedMemoryReader
 
 _HZ = 50.0
 
@@ -44,19 +44,26 @@ class RecordingService:
         return True, "已停止"
 
     def _run(self, db_path: str) -> None:
-        reader = None
+        readers = []
         db = None
+        reader = None
         try:
-            reader = SharedMemoryReader()
-            # 等待 ACC 上賽道（status == 2 LIVE）
+            readers = open_all()
+            # 等待任一遊戲上賽道（status == 2 LIVE）
             while not self._stop.is_set():
-                if reader.is_acc_running() and reader.read_graphics().status == 2:
+                reader = detect_live(readers)
+                if reader is not None:
                     break
                 self.status = {"phase": "waiting"}
                 time.sleep(0.5)
             if self._stop.is_set():
-                self.status = {"phase": "idle", "message": "已取消（未等到 ACC）"}
+                self.status = {"phase": "idle", "message": "已取消（未偵測到遊戲）"}
                 return
+            # 只留偵測到的來源，其他關掉
+            for r in readers:
+                if r is not reader:
+                    r.close()
+            readers = [reader]
 
             static = reader.read_static()
             gfx = reader.read_graphics()
@@ -64,7 +71,7 @@ class RecordingService:
             session_id = db.create_session(
                 track=static.track, car_model=static.car_model,
                 player=static.player_name, session_type=gfx.session_type,
-                game="acc")
+                game=reader.game)
             recorder = LapRecorder(db, session_id)
 
             def on_lap(n, t, valid):
@@ -81,6 +88,8 @@ class RecordingService:
                 self.status.update({
                     "phase": "recording",
                     "session_id": session_id,
+                    "game": reader.game,
+                    "game_name": reader.display_name,
                     "track": static.track,
                     "car": static.car_model,
                     "current_lap": gfx.completed_laps + 1,
@@ -102,8 +111,11 @@ class RecordingService:
         finally:
             if db is not None:
                 db.close()
-            if reader is not None:
-                reader.close()
+            for r in readers:
+                try:
+                    r.close()
+                except Exception:
+                    pass
 
 
 service = RecordingService()

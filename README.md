@@ -1,7 +1,19 @@
-# ACC Telemetry Agent
+# Sim Racing Telemetry Agent
 
-個人化的 Assetto Corsa Competizione 遙測分析工具 + AI 教練。
-規格見 `ACC_Telemetry_Agent_Spec.md`（原始文件在 Downloads）。
+個人化的模擬賽車遙測分析工具 + AI 教練。**支援 ACC 與 iRacing**（自動偵測），
+分析、儀表板、AI 教練全部共用。原始規格見 `ACC_Telemetry_Agent_Spec.md`。
+
+## 支援遊戲
+
+| 遊戲 | 資料來源 | 狀態 |
+|---|---|---|
+| Assetto Corsa Competizione | Shared Memory + Broadcasting UDP | ✅ |
+| iRacing | 官方 SDK（pyirsdk） | ✅ |
+| F1 25 | 官方 UDP 遙測 | 規劃中 |
+
+按「開始錄製」後自動偵測哪個遊戲在賽道上，session 以 `[ACC]` / `[iR]` 標籤區分。
+iRacing 對應：`LapDistPct` → spline、GPS 經緯度 → 賽道地圖座標、
+`PlayerTrackSurface` → 有效圈判定、胎面中央溫度 → 胎溫卡（iRacing 無即時胎壓）。
 
 ## 開發進度
 
@@ -211,6 +223,9 @@ analysis/                    # 階段三
   compare.py                 # delta time / 煞車區段分析 / 文字摘要
   plot.py                    # 三面板比較圖
   compare_laps.py            # 比較 CLI
+sources/                     # 多遊戲遙測來源（統一 reader 介面）
+  acc.py                     # ACC（包裝 shared memory）
+  iracing.py                 # iRacing（pyirsdk 映射）
 agent/                       # 階段四
   coach.py                   # AI 教練（context 組裝 + Claude API 呼叫）
 data/tracks/<game>/          # 彎道對照表（spline → 彎名）

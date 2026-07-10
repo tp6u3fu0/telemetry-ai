@@ -15,7 +15,9 @@ def load_corners(game: str, track: str) -> list | None:
     """回傳彎道清單 [{numbers, name, start, end}, ...]，無對照表回傳 None。"""
     if not game or not track:
         return None
-    path = _TRACKS_DIR / game / f"{track.strip().lower()}.json"
+    # iRacing 的 track 名有空格（如 "okayama full"），檔名以底線代替
+    slug = track.strip().lower().replace(" ", "_")
+    path = _TRACKS_DIR / game / f"{slug}.json"
     if not path.exists():
         return None
     with open(path, encoding="utf-8") as f:

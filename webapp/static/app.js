@@ -41,9 +41,12 @@ async function fetchJSON(url, opts) {
 
 /* ---------- 選單 ---------- */
 
+const GAME_TAG = { acc: "ACC", iracing: "iR", f1_25: "F1" };
+
 function sessionLabel(s) {
+  const tag = GAME_TAG[s.game] || s.game || "?";
   const base = s.label || `${s.track || "?"} · ${s.car_model || "?"}`;
-  return `#${s.session_id}  ${base} · ${s.lap_count} laps`;
+  return `#${s.session_id} [${tag}] ${base} · ${s.lap_count} laps`;
 }
 
 async function init(keepSelection = false) {
@@ -119,11 +122,11 @@ function setRecordUI(st) {
   if (st.phase === "waiting") {
     btn.textContent = "■ 停止";
     btn.classList.add("armed");
-    box.textContent = "等待 ACC 進入賽道…";
+    box.textContent = "等待遊戲進入賽道…（支援 ACC / iRacing，自動偵測）";
   } else if (st.phase === "recording") {
     btn.textContent = "■ 停止錄製";
     btn.classList.add("armed");
-    box.innerHTML = `<span class="rec-dot"></span>REC  ${st.track || ""}\n` +
+    box.innerHTML = `<span class="rec-dot"></span>REC [${st.game_name || ""}] ${st.track || ""}\n` +
       `Lap ${st.current_lap} @ ${st.spline_pct}% · ${st.current_time}\n` +
       `已存 ${st.laps_saved} 圈${st.last_lap ? " · " + st.last_lap : ""}`;
   } else if (st.phase === "error") {

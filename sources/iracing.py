@@ -14,7 +14,9 @@
 from __future__ import annotations
 
 import math
+import re
 
+from data_store.opponents import OpponentSample
 from telemetry_listener.shared_memory import (GraphicsSnapshot,
                                               PhysicsSnapshot, StaticInfo)
 
@@ -167,6 +169,66 @@ class IRacingReader:
             world_x=wx,
             world_y=wy,
         )
+
+    def track_length_m(self) -> float:
+        """WeekendInfo.TrackLength 是 '3.93 km' 這種字串。"""
+        try:
+            m = re.match(r"([\d.]+)\s*km",
+                         str(self.ir["WeekendInfo"]["TrackLength"]))
+            return float(m.group(1)) * 1000 if m else 0.0
+        except Exception:
+            return 0.0
+
+    def _driver_names(self) -> dict:
+        """carIdx -> 車手名（pace car 排除）。"""
+        try:
+            info = self.ir["DriverInfo"]
+            return {d["CarIdx"]: str(d.get("UserName") or f"Car {d['CarIdx']}")
+                    for d in info["Drivers"]
+                    if not d.get("CarIsPaceCar")}
+        except Exception:
+            return {}
+
+    def read_opponents(self) -> list:
+        """CarIdx 陣列：spline/圈速/檔位/轉速。iRacing 不提供對手踏板；
+        速度由 tracker 從 spline 位移推導。"""
+        self._freeze()
+        pcts = self._get("CarIdxLapDistPct")
+        if not pcts:
+            return []
+        player = None
+        try:
+            player = self.ir["DriverInfo"]["DriverCarIdx"]
+        except Exception:
+            pass
+        completed = self._get("CarIdxLapCompleted") or []
+        last_times = self._get("CarIdxLastLapTime") or []
+        gears = self._get("CarIdxGear") or []
+        rpms = self._get("CarIdxRPM") or []
+        pits = self._get("CarIdxOnPitRoad") or []
+        surfaces = self._get("CarIdxTrackSurface") or []
+        names = self._driver_names()
+        out = []
+        for i, pct in enumerate(pcts):
+            if i == player or i not in names:
+                continue
+            surface = surfaces[i] if i < len(surfaces) else -1
+            if surface is None or surface < 0 or pct is None or pct < 0:
+                continue    # 不在世界中
+            last_s = last_times[i] if i < len(last_times) else 0
+            out.append(OpponentSample(
+                car_key=f"ir_{i}",
+                name=names[i],
+                spline=float(pct),
+                laps=max(0, int(completed[i] if i < len(completed) else 0)),
+                last_lap_ms=max(0, int((last_s or 0) * 1000)),
+                speed_kmh=None,     # 由 tracker 推導
+                gear=int(gears[i]) if i < len(gears) else None,
+                rpm=int(rpms[i]) if i < len(rpms) else None,
+                in_pit=bool(pits[i]) if i < len(pits) else False,
+                on_track=surface >= 1,
+            ))
+        return out
 
     def read_static(self) -> StaticInfo:
         track = car = player = ""

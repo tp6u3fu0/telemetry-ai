@@ -21,6 +21,7 @@ import struct
 import threading
 import time
 
+from data_store.opponents import OpponentSample
 from telemetry_listener.shared_memory import (GraphicsSnapshot,
                                               PhysicsSnapshot, StaticInfo)
 
@@ -59,9 +60,10 @@ class F1Reader:
     display_name = "F1 25"
 
     def __init__(self, port: int = _PORT, listen: bool = True):
-        self._state: dict = {}          # telemetry / lap / session / motion
+        self._state: dict = {}          # telemetry / lap / session / motion / 全車陣列
         self._last_rx = 0.0
         self._frame = 0
+        self._player_idx = 0
         self._stop = threading.Event()
         self._sock = None
         self._thread = None
@@ -104,30 +106,55 @@ class F1Reader:
             return
         body = _HEADER.size
         self._frame = frame
-        if packet_id == 6 and len(data) >= body + (player_idx + 1) * _TEL_CAR_SIZE:
+        self._player_idx = player_idx
+        if packet_id == 6 and len(data) >= body + 22 * _TEL_CAR_SIZE:
+            cars = []
+            for i in range(22):
+                o = body + i * _TEL_CAR_SIZE
+                (speed, throttle, steer, brake, _clutch, gear, rpm) = \
+                    struct.unpack_from("<HfffBbH", data, o)
+                cars.append({"speed": speed, "throttle": throttle,
+                             "steer": steer, "brake": brake,
+                             "gear": gear, "rpm": rpm})
+            self._state["tel_cars"] = cars
             o = body + player_idx * _TEL_CAR_SIZE
-            (speed, throttle, steer, brake, _clutch, gear, rpm) = struct.unpack_from(
-                "<HfffBbH", data, o)
             inner = struct.unpack_from("<4B", data, o + 34)   # 胎內溫 [RL,RR,FL,FR]
             press = struct.unpack_from("<4f", data, o + 40)   # 胎壓   [RL,RR,FL,FR]
             self._state["telemetry"] = {
-                "speed": speed, "throttle": throttle, "steer": steer,
-                "brake": brake, "gear": gear, "rpm": rpm,
+                **cars[player_idx],
                 "tyre_temp": (inner[2], inner[3], inner[0], inner[1]),   # → FL FR RL RR
                 "tyre_press": (press[2], press[3], press[0], press[1]),
             }
-        elif packet_id == 2 and len(data) >= body + (player_idx + 1) * _LAP_CAR_SIZE:
-            o = body + player_idx * _LAP_CAR_SIZE
-            last_ms, cur_ms = struct.unpack_from("<II", data, o)
-            lap_dist, _total = struct.unpack_from("<ff", data, o + 20)
-            (_pos, lap_num, pit_status, _stops, _sector, invalid) = \
-                struct.unpack_from("<6B", data, o + 32)
-            driver_status = struct.unpack_from("<B", data, o + 44)[0]
-            self._state["lap"] = {
-                "last_ms": last_ms, "cur_ms": cur_ms, "lap_dist": lap_dist,
-                "lap_num": lap_num, "pit": pit_status, "invalid": invalid,
-                "driver_status": driver_status,
-            }
+        elif packet_id == 2 and len(data) >= body + 22 * _LAP_CAR_SIZE:
+            cars = []
+            for i in range(22):
+                o = body + i * _LAP_CAR_SIZE
+                last_ms, cur_ms = struct.unpack_from("<II", data, o)
+                lap_dist = struct.unpack_from("<f", data, o + 20)[0]
+                (_pos, lap_num, pit_status, _stops, _sector, invalid) = \
+                    struct.unpack_from("<6B", data, o + 32)
+                driver_status, result_status = struct.unpack_from("<BB", data, o + 44)
+                cars.append({"last_ms": last_ms, "cur_ms": cur_ms,
+                             "lap_dist": lap_dist, "lap_num": lap_num,
+                             "pit": pit_status, "invalid": invalid,
+                             "driver_status": driver_status,
+                             "result_status": result_status})
+            self._state["lap_cars"] = cars
+            self._state["lap"] = cars[player_idx]
+        elif packet_id == 4 and len(data) > body + 1:
+            # Participants：車手名。F1 25 的 per-car struct 可能比 F1 24 大，
+            # stride 由封包長度動態推算；名字欄位固定在每車 offset 7 起。
+            n = data[body]
+            stride = (len(data) - body - 1) // 22 if n else 0
+            names = []
+            for i in range(22):
+                o = body + 1 + i * stride
+                if stride < 40 or o + 7 + 32 > len(data):
+                    names.append("")
+                    continue
+                raw = data[o + 7:o + 7 + 32]
+                names.append(raw.split(b"\x00")[0].decode("utf-8", "replace"))
+            self._state["names"] = names
         elif packet_id == 0 and len(data) >= body + (player_idx + 1) * _MOT_CAR_SIZE:
             o = body + player_idx * _MOT_CAR_SIZE
             wx, _wy, wz = struct.unpack_from("<fff", data, o)
@@ -197,6 +224,45 @@ class F1Reader:
             world_x=float(m.get("x", 0.0)),
             world_y=float(m.get("y", 0.0)),
         )
+
+    def track_length_m(self) -> float:
+        return float(self._state.get("session", {}).get("track_len", 0) or 0)
+
+    def read_opponents(self) -> list:
+        """全部對手車的取樣（F1 封包原生含全車遙測——完整保真度）。"""
+        lap_cars = self._state.get("lap_cars")
+        if not lap_cars:
+            return []
+        tel_cars = self._state.get("tel_cars", [])
+        names = self._state.get("names", [])
+        track_len = self.track_length_m()
+        out = []
+        for i, lap in enumerate(lap_cars):
+            if i == self._player_idx:
+                continue
+            if lap.get("result_status") != 2:      # 2 = active
+                continue
+            tel = tel_cars[i] if i < len(tel_cars) else {}
+            dist = lap.get("lap_dist", 0.0)
+            spline = ((dist % track_len) / track_len) if track_len > 0 and dist >= 0 \
+                else 0.0
+            name = (names[i] if i < len(names) else "") or f"Car {i + 1}"
+            out.append(OpponentSample(
+                car_key=f"f1_{i}",
+                name=name,
+                spline=spline,
+                laps=max(0, int(lap.get("lap_num", 1)) - 1),
+                last_lap_ms=int(lap.get("last_ms", 0)),
+                speed_kmh=float(tel.get("speed", 0)) or None,
+                throttle=tel.get("throttle"),
+                brake=tel.get("brake"),
+                steer=tel.get("steer"),
+                gear=tel.get("gear"),
+                rpm=tel.get("rpm"),
+                in_pit=bool(lap.get("pit", 0)),
+                on_track=lap.get("driver_status", 0) in _ON_TRACK_STATUSES,
+            ))
+        return out
 
     def read_static(self) -> StaticInfo:
         ses = self._state.get("session", {})

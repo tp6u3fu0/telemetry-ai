@@ -85,6 +85,9 @@ class TelemetryDB:
         if "game" not in session_cols:   # 多遊戲支援（acc / f1_25 / iracing...）
             self.conn.execute(
                 "ALTER TABLE sessions ADD COLUMN game TEXT DEFAULT 'acc'")
+        lap_cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(laps)")}
+        if "driver" not in lap_cols:     # 對手遙測：NULL = 玩家自己的圈
+            self.conn.execute("ALTER TABLE laps ADD COLUMN driver TEXT")
         self.conn.commit()
 
     def close(self) -> None:
@@ -103,13 +106,16 @@ class TelemetryDB:
         return cur.lastrowid
 
     def save_lap(self, session_id: int, lap_number: int, lap_time_ms,
-                 is_valid: bool, is_complete: bool, points: list) -> int:
-        """points: list of tuples，欄位順序見 POINT_COLUMNS；短 tuple 以 NULL 補齊。"""
+                 is_valid: bool, is_complete: bool, points: list,
+                 driver: str | None = None) -> int:
+        """points: list of tuples，欄位順序見 POINT_COLUMNS；短 tuple 以 NULL 補齊。
+
+        driver: None = 玩家；否則為對手車手名。"""
         cur = self.conn.execute(
             "INSERT INTO laps (session_id, lap_number, lap_time_ms, is_valid, "
-            "is_complete, point_count) VALUES (?, ?, ?, ?, ?, ?)",
+            "is_complete, point_count, driver) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (session_id, lap_number, lap_time_ms, int(is_valid),
-             int(is_complete), len(points)))
+             int(is_complete), len(points), driver))
         lap_id = cur.lastrowid
         width = len(POINT_COLUMNS)
         cols = ", ".join(POINT_COLUMNS)
@@ -179,8 +185,9 @@ class TelemetryDB:
         self.conn.commit()
 
     def best_lap(self, session_id: int):
-        """該 session 最快的有效完整圈。"""
+        """該 session 玩家自己最快的有效完整圈（不含對手圈）。"""
         return self.conn.execute(
             "SELECT * FROM laps WHERE session_id = ? AND is_valid = 1 "
             "AND is_complete = 1 AND lap_time_ms IS NOT NULL "
+            "AND driver IS NULL "
             "ORDER BY lap_time_ms LIMIT 1", (session_id,)).fetchone()

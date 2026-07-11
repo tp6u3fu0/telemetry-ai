@@ -131,7 +131,9 @@ function setRecordUI(st) {
     btn.classList.add("armed");
     box.innerHTML = `<span class="rec-dot"></span>REC [${st.game_name || ""}] ${st.track || ""}\n` +
       `Lap ${st.current_lap} @ ${st.spline_pct}% · ${st.current_time}\n` +
-      `已存 ${st.laps_saved} 圈${st.last_lap ? " · " + st.last_lap : ""}`;
+      `已存 ${st.laps_saved} 圈` +
+      `${st.opp_laps ? ` · 對手 ${st.opp_laps} 圈` : ""}` +
+      `${st.last_lap ? " · " + st.last_lap : ""}`;
   } else if (st.phase === "error") {
     btn.textContent = "● 開始錄製";
     btn.classList.remove("armed");
@@ -186,13 +188,26 @@ async function loadSession(sessionId) {
 
   const optHTML = (l) =>
     `<option value="${l.lap_id}">Lap ${l.lap_number}  ${fmtLap(l.lap_time_ms)}${l.lap_id === best_lap_id ? " ★" : ""}${l.is_valid ? "" : " (無效)"}</option>`;
-  $("lap-a-select").innerHTML = complete.map(optHTML).join("");
-  $("lap-b-select").innerHTML =
-    '<option value="">— 單圈分析 —</option>' + complete.map(optHTML).join("");
+  const mine = complete.filter((l) => !l.driver);
+  const oppByDriver = {};
+  for (const l of complete.filter((l) => l.driver)) {
+    (oppByDriver[l.driver] = oppByDriver[l.driver] || []).push(l);
+  }
+  const lapOptions = (withSingle) => {
+    let html = withSingle ? '<option value="">— 單圈分析 —</option>' : "";
+    html += `<optgroup label="我的圈">${mine.map(optHTML).join("")}</optgroup>`;
+    for (const [name, ls] of Object.entries(oppByDriver)) {
+      html += `<optgroup label="對手：${name}">${ls.map(optHTML).join("")}</optgroup>`;
+    }
+    return html;
+  };
+  $("lap-a-select").innerHTML = lapOptions(false);
+  $("lap-b-select").innerHTML = lapOptions(true);
 
-  // 預設：A = 最快圈；B = 最近另一完整圈，只有一圈時進單圈分析
-  const others = complete.filter((l) => l.lap_id !== best_lap_id);
-  const defaultA = best_lap_id ?? (complete[0] && complete[0].lap_id);
+  // 預設：A = 自己的最快圈；B = 自己最近的另一完整圈，只有一圈時進單圈分析
+  const others = mine.filter((l) => l.lap_id !== best_lap_id);
+  const defaultA = best_lap_id ??
+    (mine[0] && mine[0].lap_id) ?? (complete[0] && complete[0].lap_id);
   const defaultB = others.length ? others[others.length - 1].lap_id : "";
 
   renderLapList(laps, best_lap_id);
@@ -217,6 +232,7 @@ function renderLapList(laps, bestId) {
     if (l.lap_id === bestId) badges.push('<span class="badge best">BEST</span>');
     if (!l.is_valid) badges.push('<span class="badge invalid">INV</span>');
     if (!l.is_complete) badges.push('<span class="badge">PARTIAL</span>');
+    if (l.driver) badges.push(`<span class="badge">${l.driver}</span>`);
     const cls = l.lap_id === a ? "is-a" : l.lap_id === b ? "is-b" : "";
     return `<div class="lap-row ${cls}">
       <span>Lap ${l.lap_number} · ${fmtLap(l.lap_time_ms)}</span>
@@ -460,7 +476,7 @@ function renderTyres(tyres, single = false) {
 }
 
 function renderLapTrend(laps, bestId) {
-  const done = laps.filter((l) => l.is_complete && l.lap_time_ms);
+  const done = laps.filter((l) => l.is_complete && l.lap_time_ms && !l.driver);
   if (done.length < 2) { $("lap-trend").innerHTML = ""; return; }
   const times = done.map((l) => l.lap_time_ms);
   const min = Math.min(...times), max = Math.max(...times);

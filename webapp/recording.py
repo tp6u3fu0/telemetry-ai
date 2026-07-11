@@ -9,6 +9,7 @@ import threading
 import time
 
 from data_store.db import TelemetryDB
+from data_store.opponents import OpponentTracker
 from data_store.recorder import LapRecorder
 from sources import detect_live, open_all
 from telemetry_listener.live_console import format_laptime
@@ -73,6 +74,13 @@ class RecordingService:
                 player=static.player_name, session_type=gfx.session_type,
                 game=reader.game)
             recorder = LapRecorder(db, session_id)
+            # 對手遙測（reader 有支援才啟用；F1 25 / iRacing）
+            tracker = None
+            if hasattr(reader, "read_opponents"):
+                track_len = (reader.track_length_m()
+                             if hasattr(reader, "track_length_m") else 0.0)
+                tracker = OpponentTracker(db, session_id,
+                                          track_length_m=track_len)
 
             def on_lap(n, t, valid):
                 self.status["last_lap"] = (
@@ -85,6 +93,10 @@ class RecordingService:
                 phys = reader.read_physics()
                 gfx = reader.read_graphics()
                 recorder.process_sample(phys, gfx)
+                if tracker is not None:
+                    if not tracker.track_length_m and hasattr(reader, "track_length_m"):
+                        tracker.track_length_m = reader.track_length_m()
+                    tracker.process(reader.read_opponents(), time.monotonic())
                 self.status.update({
                     "phase": "recording",
                     "session_id": session_id,
@@ -97,6 +109,7 @@ class RecordingService:
                     "current_time": format_laptime(gfx.current_lap_time_ms),
                     "laps_saved": recorder.laps_saved,
                     "points": recorder.current_point_count,
+                    "opp_laps": tracker.laps_saved if tracker else 0,
                 })
                 time.sleep(period)
 

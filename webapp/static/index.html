@@ -102,29 +102,33 @@
       <button id="rename-save" class="mini-btn">存</button>
     </div>
 
-    <div class="lap-pickers">
-      <div>
-        <label class="field-label" for="lap-a-select"><span class="dot dot-a"></span>參考圈 A</label>
-        <select id="lap-a-select"></select>
-      </div>
-      <div>
-        <label class="field-label" for="lap-b-select"><span class="dot dot-b"></span>比較圈 B</label>
-        <select id="lap-b-select"></select>
-      </div>
-    </div>
+    <label class="field-label" for="driver-select">檢視車手</label>
+    <select id="driver-select"></select>
+    <div class="palette-hint">拖曳圈到右上的 A / B 欄比較</div>
+    <div id="lap-palette" class="lap-palette"></div>
 
     <div class="trend-block">
-      <div class="field-label">圈速趨勢</div>
+      <div class="field-label">圈速趨勢（我）</div>
       <div id="lap-trend" class="lap-trend"></div>
     </div>
-
-    <div id="lap-list" class="lap-list"></div>
   </aside>
 
   <main class="main">
     <div id="empty-state" class="empty-state">載入中…</div>
 
     <div id="dashboard" style="display:none">
+      <div class="compare-bar">
+        <div class="drop-slot" id="slot-a" data-slot="a">
+          <div class="slot-label"><span class="dot dot-a"></span>參考圈 A</div>
+          <div class="slot-content" id="slot-a-content">拖曳圈到此</div>
+        </div>
+        <div class="slot-swap" id="slot-swap" title="交換 A / B">⇄</div>
+        <div class="drop-slot" id="slot-b" data-slot="b">
+          <div class="slot-label"><span class="dot dot-b"></span>比較圈 B <span class="slot-opt">（留空＝單圈）</span></div>
+          <div class="slot-content" id="slot-b-content">拖曳圈到此</div>
+        </div>
+      </div>
+
       <div class="tiles">
         <div class="tile"><div class="tile-label" id="tile-a-label"><span class="dot dot-a"></span>參考圈 A</div>
           <div class="tile-value" id="tile-a">–</div></div>

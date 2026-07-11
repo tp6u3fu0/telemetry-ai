@@ -318,62 +318,167 @@ function setupRecording() {
   pollRecordStatus();   // 啟動時同步一次（app 重開時錄製可能仍在跑）
 }
 
+let lapsCache = [];        // 目前 session 全部圈（含對手）
+let bestLapId = null;
+let currentLapA = null;    // 拖到 A 欄的 lap_id
+let currentLapB = null;    // 拖到 B 欄的 lap_id（null = 單圈模式）
+
+function lapById(id) {
+  return lapsCache.find((l) => l.lap_id === id) || null;
+}
+
+// 車手清單：我在最前，對手依「最快圈」排序（名次＝速度快慢）
+function driverGroups() {
+  const mine = lapsCache.filter((l) => l.is_complete && !l.driver);
+  const oppMap = {};
+  for (const l of lapsCache.filter((l) => l.is_complete && l.driver)) {
+    (oppMap[l.driver] = oppMap[l.driver] || []).push(l);
+  }
+  const best = (ls) => Math.min(...ls
+    .filter((l) => l.is_valid && l.lap_time_ms).map((l) => l.lap_time_ms), Infinity);
+  const opps = Object.entries(oppMap)
+    .map(([name, ls]) => ({ name, laps: ls, best: best(ls) }))
+    .sort((a, b) => a.best - b.best);
+  return { mine, opps };
+}
+
 async function loadSession(sessionId) {
   const { laps, best_lap_id } = await fetchJSON(`/api/laps/${sessionId}`);
-  const complete = laps.filter((l) => l.is_complete);
+  lapsCache = laps;
+  bestLapId = best_lap_id;
+  const { mine } = driverGroups();
 
-  const optHTML = (l) =>
-    `<option value="${l.lap_id}">Lap ${l.lap_number}  ${fmtLap(l.lap_time_ms)}${l.lap_id === best_lap_id ? " ★" : ""}${l.is_valid ? "" : " (無效)"}</option>`;
-  const mine = complete.filter((l) => !l.driver);
-  const oppByDriver = {};
-  for (const l of complete.filter((l) => l.driver)) {
-    (oppByDriver[l.driver] = oppByDriver[l.driver] || []).push(l);
-  }
-  const lapOptions = (withSingle) => {
-    let html = withSingle ? '<option value="">— 單圈分析 —</option>' : "";
-    html += `<optgroup label="我的圈">${mine.map(optHTML).join("")}</optgroup>`;
-    for (const [name, ls] of Object.entries(oppByDriver)) {
-      html += `<optgroup label="對手：${name}">${ls.map(optHTML).join("")}</optgroup>`;
-    }
-    return html;
-  };
-  $("lap-a-select").innerHTML = lapOptions(false);
-  $("lap-b-select").innerHTML = lapOptions(true);
-
-  // 預設：A = 自己的最快圈；B = 自己最近的另一完整圈，只有一圈時進單圈分析
-  const others = mine.filter((l) => l.lap_id !== best_lap_id);
-  const defaultA = best_lap_id ??
-    (mine[0] && mine[0].lap_id) ?? (complete[0] && complete[0].lap_id);
-  const defaultB = others.length ? others[others.length - 1].lap_id : "";
-
-  renderLapList(laps, best_lap_id);
+  renderDriverSelect();
+  renderPalette();
   renderLapTrend(laps, best_lap_id);
-  if (defaultA == null) {
+
+  if (!mine.length && !laps.some((l) => l.is_complete)) {
     $("dashboard").style.display = "none";
     $("empty-state").style.display = "";
     $("empty-state").textContent = "此 session 沒有完整圈可分析。";
     return;
   }
-  $("lap-a-select").value = String(defaultA);
-  $("lap-b-select").value = String(defaultB);
-  $("lap-a-select").onchange = compare;
-  $("lap-b-select").onchange = compare;
+  // 預設：A = 我的最快圈；B = 我最近另一完整圈（只有一圈 → 單圈）
+  const others = mine.filter((l) => l.lap_id !== best_lap_id);
+  currentLapA = best_lap_id ?? (mine[0] && mine[0].lap_id) ??
+    (laps.find((l) => l.is_complete) || {}).lap_id ?? null;
+  currentLapB = others.length ? others[others.length - 1].lap_id : null;
+  if (currentLapA == null) {
+    $("dashboard").style.display = "none";
+    $("empty-state").style.display = "";
+    $("empty-state").textContent = "此 session 沒有完整圈可分析。";
+    return;
+  }
   await compare();
 }
 
-function renderLapList(laps, bestId) {
-  const a = Number($("lap-a-select").value), b = Number($("lap-b-select").value);
-  $("lap-list").innerHTML = laps.map((l) => {
+function renderDriverSelect() {
+  const { mine, opps } = driverGroups();
+  const sel = $("driver-select");
+  const prev = sel.value;
+  let html = mine.length ? '<option value="__mine">我的圈</option>' : "";
+  opps.forEach((o, i) =>
+    html += `<option value="${o.name}">${i + 1}. ${o.name}${
+      isFinite(o.best) ? "（最快 " + fmtLap(o.best) + "）" : ""}</option>`);
+  sel.innerHTML = html;
+  if ([...sel.options].some((o) => o.value === prev)) sel.value = prev;
+  sel.onchange = renderPalette;
+}
+
+// 目前選中車手的圈，做成可拖曳卡片
+function renderPalette() {
+  const who = $("driver-select").value || "__mine";
+  const laps = who === "__mine"
+    ? lapsCache.filter((l) => l.is_complete && !l.driver)
+    : lapsCache.filter((l) => l.is_complete && l.driver === who);
+  $("lap-palette").innerHTML = laps.map((l) => {
     const badges = [];
-    if (l.lap_id === bestId) badges.push('<span class="badge best">BEST</span>');
+    if (l.lap_id === bestLapId) badges.push('<span class="badge best">BEST</span>');
     if (!l.is_valid) badges.push('<span class="badge invalid">INV</span>');
-    if (!l.is_complete) badges.push('<span class="badge">PARTIAL</span>');
-    if (l.driver) badges.push(`<span class="badge">${l.driver}</span>`);
-    const cls = l.lap_id === a ? "is-a" : l.lap_id === b ? "is-b" : "";
-    return `<div class="lap-row ${cls}">
+    const slot = l.lap_id === currentLapA ? "in-a"
+      : l.lap_id === currentLapB ? "in-b" : "";
+    return `<div class="lap-chip ${slot}" draggable="true" data-lapid="${l.lap_id}">
       <span>Lap ${l.lap_number} · ${fmtLap(l.lap_time_ms)}</span>
       <span class="badges">${badges.join("")}</span></div>`;
-  }).join("");
+  }).join("") || '<div class="palette-hint">此車手沒有完整圈</div>';
+  for (const chip of $("lap-palette").querySelectorAll(".lap-chip")) {
+    chip.addEventListener("dragstart", (e) => {
+      e.dataTransfer.setData("text/lapid", chip.dataset.lapid);
+      e.dataTransfer.effectAllowed = "copy";
+    });
+    // 雙擊快速指派：優先填 A，A 有了填 B
+    chip.addEventListener("dblclick", () => {
+      const id = Number(chip.dataset.lapid);
+      if (currentLapA == null || currentLapA === id) assignSlot("a", id);
+      else assignSlot("b", id);
+    });
+  }
+}
+
+function slotChipHTML(id) {
+  const l = lapById(id);
+  if (!l) return "拖曳圈到此";
+  const who = l.driver ? l.driver : "我";
+  return `<div class="slot-chip">
+    <div class="slot-chip-main">${who} · Lap ${l.lap_number}</div>
+    <div class="slot-chip-time">${fmtLap(l.lap_time_ms)}${l.is_valid ? "" : " (無效)"}</div>
+    <button class="slot-clear" data-slot-clear="${l.lap_id}">✕</button></div>`;
+}
+
+function renderSlots() {
+  $("slot-a-content").innerHTML = currentLapA ? slotChipHTML(currentLapA) : "拖曳圈到此";
+  $("slot-b-content").innerHTML = currentLapB ? slotChipHTML(currentLapB) : "拖曳圈到此（留空＝單圈）";
+  $("slot-a").classList.toggle("filled", !!currentLapA);
+  $("slot-b").classList.toggle("filled", !!currentLapB);
+  for (const btn of document.querySelectorAll(".slot-clear")) {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      if (Number(btn.dataset.slotClear) === currentLapA) clearSlot("a");
+      else clearSlot("b");
+    };
+  }
+}
+
+async function assignSlot(slot, id) {
+  if (slot === "a") {
+    if (currentLapB === id) currentLapB = null;   // 同一圈不能同時在兩欄
+    currentLapA = id;
+  } else {
+    if (currentLapA === id) return;               // B 不能等於 A
+    currentLapB = id;
+  }
+  await compare();
+}
+
+async function clearSlot(slot) {
+  if (slot === "a") {
+    // A 清空 → 把 B 提上來當 A（維持至少一圈）
+    currentLapA = currentLapB;
+    currentLapB = null;
+  } else {
+    currentLapB = null;
+  }
+  if (currentLapA == null) { renderSlots(); renderPalette(); return; }
+  await compare();
+}
+
+function setupDragDrop() {
+  for (const slot of ["a", "b"]) {
+    const el = $("slot-" + slot);
+    el.addEventListener("dragover", (e) => { e.preventDefault(); el.classList.add("drag-over"); });
+    el.addEventListener("dragleave", () => el.classList.remove("drag-over"));
+    el.addEventListener("drop", (e) => {
+      e.preventDefault();
+      el.classList.remove("drag-over");
+      const id = Number(e.dataTransfer.getData("text/lapid"));
+      if (id) assignSlot(slot, id);
+    });
+  }
+  $("slot-swap").onclick = async () => {
+    if (!currentLapB) return;
+    [currentLapA, currentLapB] = [currentLapB, currentLapA];
+    await compare();
+  };
 }
 
 /* ---------- 圖表 ---------- */
@@ -625,28 +730,25 @@ function renderLapTrend(laps, bestId) {
 }
 
 async function compare() {
-  // 圈選擇變更的進入點：B 為空 = 單圈分析
-  const a = Number($("lap-a-select").value);
-  const bRaw = $("lap-b-select").value;
-  isSingle = bRaw === "";
+  const a = currentLapA;
+  const b = currentLapB;
+  isSingle = !b;
+  renderSlots();
+  renderPalette();      // 更新卡片上的 in-a / in-b 標記
   // 先顯示 dashboard 再渲染：地圖 canvas 需要量得到實際尺寸
   $("empty-state").style.display = "none";
   $("dashboard").style.display = "";
   setSingleUI(isSingle);
   try {
     if (isSingle) await singleView(a);
-    else await compareView(a, Number(bRaw));
+    else await compareView(a, b);
   } catch (err) {
     $("empty-state").style.display = "";
     $("empty-state").textContent = "載入失敗：" + err.message;
     $("dashboard").style.display = "none";
     return;
   }
-  await loadChat(a, isSingle ? 0 : Number(bRaw));
-  // 更新側欄圈次高亮
-  const sessionId = Number($("session-select").value);
-  const { laps, best_lap_id } = await fetchJSON(`/api/laps/${sessionId}`);
-  renderLapList(laps, best_lap_id);
+  await loadChat(a, isSingle ? 0 : b);
 }
 
 function setSingleUI(single) {
@@ -1322,6 +1424,7 @@ function setupSettings() {
 }
 
 setupNav();
+setupDragDrop();
 setupSessionActions();
 setupRecording();
 setupTraining();

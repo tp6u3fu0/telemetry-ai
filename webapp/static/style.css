@@ -459,6 +459,59 @@ select {
   font-size: 10px; white-space: nowrap; z-index: 10;
 }
 
+/* ---- 拖曳選圈：車手選單 + 圈卡片 palette ---- */
+.palette-hint { font-size: 11px; color: var(--muted); margin: 4px 0 6px; }
+.lap-palette {
+  display: flex; flex-direction: column; gap: 5px;
+  max-height: 42vh; overflow-y: auto; margin-bottom: 12px;
+}
+.lap-chip {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 7px 10px; border-radius: 8px; cursor: grab;
+  background: var(--surface-2); border: 1px solid var(--border);
+  font-size: 13px; color: var(--ink-2); user-select: none;
+}
+.lap-chip:hover { border-color: var(--muted); }
+.lap-chip:active { cursor: grabbing; }
+.lap-chip.in-a { border-color: var(--series-a); color: var(--ink); }
+.lap-chip.in-b { border-color: var(--series-b); color: var(--ink); }
+.lap-chip .badges { display: flex; gap: 4px; }
+
+/* ---- 比較欄（drop slots） ---- */
+.compare-bar {
+  display: flex; align-items: stretch; gap: 10px; margin-bottom: 16px;
+}
+.drop-slot {
+  flex: 1; min-height: 66px; border-radius: 10px; padding: 10px 14px;
+  background: var(--surface); border: 1.5px dashed var(--border);
+  transition: border-color 0.15s, background 0.15s;
+}
+.drop-slot.filled { border-style: solid; }
+.drop-slot#slot-a.filled { border-color: var(--series-a); }
+.drop-slot#slot-b.filled { border-color: var(--series-b); }
+.drop-slot.drag-over {
+  border-color: var(--ink); background: var(--surface-2);
+}
+.slot-label { font-size: 11px; color: var(--muted); margin-bottom: 6px; }
+.slot-opt { color: var(--baseline); }
+.slot-content { font-size: 13px; color: var(--muted); }
+.slot-chip { display: flex; align-items: center; gap: 10px; }
+.slot-chip-main { font-size: 14px; color: var(--ink); font-weight: 600; }
+.slot-chip-time {
+  font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--ink); flex: 1;
+}
+.slot-clear {
+  background: none; border: none; color: var(--muted); cursor: pointer;
+  font-size: 14px; padding: 2px 6px; border-radius: 4px;
+}
+.slot-clear:hover { color: var(--loss); }
+.slot-swap {
+  align-self: center; cursor: pointer; color: var(--muted);
+  font-size: 20px; padding: 4px 8px; border-radius: 6px; user-select: none;
+}
+.slot-swap:hover { color: var(--ink); background: var(--surface-2); }
+
 /* ---- 區段表 ---- */
 table.zones { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
 .zones th {

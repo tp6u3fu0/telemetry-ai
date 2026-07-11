@@ -240,21 +240,34 @@ function setRecordUI(st) {
 
 async function pollRecordStatus() {
   const st = await fetchJSON("/api/record/status");
-  setRecordUI(st);
-  renderTrainPanel(st);
   const active = st.phase === "waiting" || st.phase === "recording";
+  const isTrain = st.mode === "train";
+
+  // 訓練模式 → 專注畫面（完成後 recording 仍在跑，active 仍 true，續顯示得分）
+  if (isTrain && active) {
+    if (!inFocus) showFocus();
+    renderFocus(st);
+  } else if (inFocus && !isTrain) {
+    exitFocus();               // 訓練被外部結束 → 離開專注畫面
+    goHome();
+  }
+
+  if (!inFocus) {
+    setRecordUI(st);
+    renderTrainPanel(st);
+  }
+
   if (active) {
-    // 每存一圈就刷新首頁 session 卡片（使用者錄製時在首頁看）
     if ((st.laps_saved || 0) !== lastLapsSaved) {
       lastLapsSaved = st.laps_saved || 0;
-      if (currentView === "home") await renderHome();
+      if (currentView === "home" && !inFocus) await renderHome();
     }
     recordPoll = setTimeout(pollRecordStatus, 1000);
   } else {
     recordPoll = null;
     if (lastLapsSaved > 0 || st.session_id) {
       lastLapsSaved = 0;
-      if (currentView === "home") await renderHome();
+      if (currentView === "home" && !inFocus) await renderHome();
     }
   }
 }
@@ -903,15 +916,27 @@ async function coachSend(text) {
       body: JSON.stringify({ a: coachCtx.a, b: coachCtx.b || null,
                              messages: coachHistory }),
     });
-    const data = await res.json();
-    thinking.remove();
     if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      thinking.remove();
       coachAddMsg("assistant", data.error || "發生錯誤", "error");
-      coachHistory.pop();   // 失敗的問題不留在歷史裡
-    } else {
-      coachAddMsg("assistant", data.reply);
-      coachHistory.push({ role: "assistant", content: data.reply });
+      coachHistory.pop();       // 失敗的問題不留在歷史裡
+      return;
     }
+    // 串流：邊收邊把文字填進泡泡（1-2 秒就開始出字，不用乾等）
+    thinking.remove();
+    const bubble = coachAddMsg("assistant", "", "assistant");
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let reply = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      reply += decoder.decode(value, { stream: true });
+      bubble.textContent = reply;
+      $("coach-messages").scrollTop = $("coach-messages").scrollHeight;
+    }
+    coachHistory.push({ role: "assistant", content: reply });
   } catch (err) {
     thinking.remove();
     coachAddMsg("assistant", "連線失敗：" + err.message, "error");
@@ -1066,25 +1091,114 @@ function renderTrainPanel(st) {
   }
 }
 
+/* ---------- 555 專注畫面 ---------- */
+
+let inFocus = false;
+
+function showFocus() {
+  inFocus = true;
+  $("home-view").hidden = true;
+  $("dashboard-view").hidden = true;
+  $("focus-view").hidden = false;
+}
+
+function exitFocus() {
+  inFocus = false;
+  $("focus-view").hidden = true;
+  $("focus-target").removeAttribute("data-shown");
+}
+
+function renderFocus(st) {
+  const t = st.training;
+  $("focus-stage").textContent = "555 訓練" + (t ? " · " + t.stage_label : "");
+  $("focus-req").textContent = t ? t.requirement : "等待進入賽道…";
+  $("focus-cur-time").textContent = st.current_time || "--:--.---";
+  $("focus-lapcount").textContent = `已完成 ${st.laps_saved || 0} 圈`;
+
+  // 5 圈進度點（僅在有連續要求的階段）
+  let prog = null;
+  if (t) {
+    if (t.stage === "baseline") prog = t.baseline_progress;
+    else if (t.stage === "beat") prog = t.beat_progress;
+    else if (t.stage === "achieve") prog = t.achieve_progress;
+  }
+  $("focus-progress").innerHTML = prog === null ? "" : dots5(prog);
+
+  // 設定目標輸入（用 data-shown 避免每秒重建把輸入清掉）
+  const tgt = $("focus-target");
+  if (t && t.stage === "set_target") {
+    if (!tgt.dataset.shown) {
+      tgt.innerHTML =
+        `<input id="focus-target-input" value="${(t.suggested_target / 1000).toFixed(3)}">` +
+        `<button id="focus-target-set" class="mini-btn">設定目標</button>`;
+      tgt.dataset.shown = "1";
+      $("focus-target-set").onclick = async () => {
+        const ms = parseTimeToMs($("focus-target-input").value);
+        if (ms) {
+          await fetch("/api/train/target", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ms }),
+          }).catch(() => {});
+        }
+      };
+    }
+    tgt.hidden = false;
+  } else {
+    tgt.hidden = true;
+    tgt.removeAttribute("data-shown");
+  }
+
+  // 完成得分
+  const sc = $("focus-score");
+  if (t && t.stage === "done" && t.score) {
+    sc.hidden = false;
+    sc.innerHTML =
+      `<div class="fs-total">${t.score.total}</div>` +
+      `<div class="fs-sub">一致性 ${t.score.consistency} · 進步 ${t.score.improvement}` +
+      ` · 企圖心 ${t.score.ambition} · 效率 ${t.score.efficiency}</div>`;
+    $("focus-stop").textContent = "完成 · 返回首頁";
+  } else {
+    sc.hidden = true;
+    $("focus-stop").textContent = "停止";
+  }
+
+  // 圈速清單（新的在下）
+  if (t && t.recent) {
+    $("focus-laps").innerHTML = t.recent.map((r) => {
+      const bad = !r.good;
+      return `<div class="focus-lap-row ${bad ? "bad" : ""}">
+        <span>Lap ${r.n}</span>
+        <span class="fl-time">${r.time_ms ? fmtLap(r.time_ms) : "無效"}</span>
+        <span class="fl-tag">${bad ? "✗ 失誤" : "✓"}</span></div>`;
+    }).join("");
+  }
+}
+
+async function stopTraining() {
+  await fetchJSON("/api/record/stop", { method: "POST" }).catch(() => {});
+  if (recordPoll) clearTimeout(recordPoll);
+  recordPoll = null;
+  exitFocus();
+  goHome();
+}
+
 function setupTraining() {
   $("train-start").onclick = async () => {
     const st = await fetchJSON("/api/record/status");
     const active = st.phase === "waiting" || st.phase === "recording";
     if (active && st.mode === "train") {
-      await fetchJSON("/api/record/stop", { method: "POST" });
-      if (recordPoll) clearTimeout(recordPoll);
-      recordPoll = null;
-      await pollRecordStatus();
-      if (currentView === "home") await renderHome();
+      await stopTraining();
     } else if (!active) {
       await fetchJSON("/api/record/start", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mode: "train" }),
       });
       lastLapsSaved = 0;
+      showFocus();          // 立刻切到專注畫面
       pollRecordStatus();
     }
   };
+  $("focus-stop").onclick = stopTraining;
 }
 
 /* ---------- 設定 modal ---------- */

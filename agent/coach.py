@@ -111,3 +111,15 @@ def ask(system_blocks: list, messages: list) -> str:
         messages=messages,
     )
     return "".join(b.text for b in response.content if b.type == "text")
+
+
+def ask_stream(system_blocks: list, messages: list):
+    """串流版：逐段 yield 文字，讓 UI 邊生成邊顯示（回覆感覺快很多）。"""
+    with _client().messages.stream(
+        model=get_model(),
+        max_tokens=2048,
+        system=system_blocks,
+        messages=messages,
+    ) as stream:
+        for text in stream.text_stream:
+            yield text

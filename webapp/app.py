@@ -11,7 +11,7 @@ import os
 
 import anthropic
 import numpy as np
-from flask import Flask, jsonify, request
+from flask import Flask, Response, jsonify, request, stream_with_context
 
 from agent import coach
 from analysis.compare import compare_laps, microsectors, summarize, tyre_summary
@@ -221,21 +221,43 @@ def api_coach():
             track=session["track"] if session else "",
             car=session["car_model"] if session else "",
         )
-        try:
-            reply = coach.ask(system_blocks, messages)
-        except anthropic.AuthenticationError:
-            return jsonify({"error": "API 金鑰無效，請到 ⚙ 設定檢查。"}), 401
-        except anthropic.RateLimitError:
-            return jsonify({"error": "API 速率限制，稍後再試。"}), 429
-        except anthropic.APIStatusError as exc:
-            return jsonify({"error": f"Claude API 錯誤（{exc.status_code}）"}), 502
-        except anthropic.APIConnectionError:
-            return jsonify({"error": "無法連線到 Claude API，請檢查網路。"}), 502
-        db.save_chat(lap_a, lap_b or 0,
-                     messages + [{"role": "assistant", "content": reply}])
-        return jsonify({"reply": reply})
     finally:
         db.close()
+
+    # 串流回覆：逐字送出，前端邊收邊顯示（大幅改善「像卡住」的體感）。
+    # 錯誤多發生在串流開始前（憑證/context），已在上面攔掉；串流中的例外
+    # 以文字附加回傳，並在成功結束時存檔。
+    db_path = app.config["DB_PATH"]
+
+    def generate():
+        collected = []
+        try:
+            for chunk in coach.ask_stream(system_blocks, messages):
+                collected.append(chunk)
+                yield chunk
+        except anthropic.AuthenticationError:
+            yield "\n\n[教練錯誤：API 金鑰無效，請到 ⚙ 設定檢查]"
+            return
+        except anthropic.RateLimitError:
+            yield "\n\n[教練錯誤：API 速率限制，稍後再試]"
+            return
+        except anthropic.APIStatusError as exc:
+            yield f"\n\n[教練錯誤：Claude API {exc.status_code}]"
+            return
+        except anthropic.APIConnectionError:
+            yield "\n\n[教練錯誤：無法連線到 Claude API]"
+            return
+        reply = "".join(collected)
+        if reply:
+            d = TelemetryDB(db_path)
+            try:
+                d.save_chat(lap_a, lap_b or 0,
+                            messages + [{"role": "assistant", "content": reply}])
+            finally:
+                d.close()
+
+    return Response(stream_with_context(generate()),
+                    mimetype="text/plain; charset=utf-8")
 
 
 @app.get("/api/coach/history")

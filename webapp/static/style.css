@@ -68,7 +68,8 @@ body {
 }
 .pb-track { font-size: 12px; color: var(--ink-2); }
 .pb-time { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
-.pb-game { font-size: 10px; color: var(--muted); }
+.pb-game { font-size: 10px; color: var(--muted);
+  display: flex; align-items: center; gap: 6px; margin-top: 4px; }
 .pb-empty { color: var(--muted); font-size: 13px; }
 
 /* session 卡片 */
@@ -80,10 +81,15 @@ body {
   transition: border-color 0.15s, transform 0.1s;
 }
 .session-card:hover { border-color: var(--baseline); transform: translateX(2px); }
-.session-card .sc-game {
-  font-size: 10px; font-weight: 700; padding: 3px 7px; border-radius: 6px;
-  background: var(--surface-2); color: var(--ink-2); flex: none;
+/* 遊戲圖標 badge（SVG glyph + 品牌色） */
+.game-badge {
+  display: inline-flex; align-items: center; gap: 5px; flex: none;
+  padding: 4px 8px; border-radius: 7px; font-size: 11px; font-weight: 700;
+  color: var(--gb); background: color-mix(in srgb, var(--gb) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--gb) 40%, transparent);
 }
+.game-glyph { width: 15px; height: 15px; display: block; }
+.pb-game .game-badge { padding: 2px 6px; font-size: 10px; }
 .session-card .sc-main { flex: 1; min-width: 0; }
 .session-card .sc-track { font-size: 14px; color: var(--ink); }
 .session-card .sc-sub { font-size: 11px; color: var(--muted); }

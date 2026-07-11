@@ -44,7 +44,34 @@ async function fetchJSON(url, opts) {
 
 /* ---------- 選單 ---------- */
 
-const GAME_TAG = { acc: "ACC", iracing: "iR", f1_25: "F1" };
+// 每個遊戲的圖標：SVG glyph + 品牌色。text-only 的 <option> 用 tag 字串。
+const GAME_META = {
+  acc:     { tag: "ACC", color: "#3987e5", glyph: "wheel" },
+  iracing: { tag: "iR",  color: "#e0503a", glyph: "flag" },
+  f1_25:   { tag: "F1",  color: "#d4462a", glyph: "car" },
+};
+
+const GAME_TAG = Object.fromEntries(
+  Object.entries(GAME_META).map(([k, v]) => [k, v.tag]));
+
+const GLYPHS = {
+  wheel: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="2.4" fill="currentColor" stroke="none"/>' +
+         '<path d="M12 9.6V4M9.9 13.2 5 16M14.1 13.2 19 16"/>',
+  flag: '<path d="M6 21V4"/><path d="M6 5h11l-2 3 2 3H6" fill="currentColor" stroke="none"/>',
+  car: '<path d="M3 14h18M5 14l1.6-4.2A2 2 0 0 1 8.5 8.5h7a2 2 0 0 1 1.9 1.3L19 14"/>' +
+       '<circle cx="7.5" cy="16.5" r="1.6" fill="currentColor" stroke="none"/>' +
+       '<circle cx="16.5" cy="16.5" r="1.6" fill="currentColor" stroke="none"/>',
+};
+
+function gameIcon(game, withTag = true) {
+  const m = GAME_META[game] || { tag: (game || "?").toUpperCase().slice(0, 3),
+                                 color: "#898781", glyph: "wheel" };
+  const svg = `<svg class="game-glyph" viewBox="0 0 24 24" fill="none"
+    stroke="currentColor" stroke-width="1.6" stroke-linecap="round"
+    stroke-linejoin="round">${GLYPHS[m.glyph] || GLYPHS.wheel}</svg>`;
+  return `<span class="game-badge" style="--gb:${m.color}">${svg}${
+    withTag ? `<span>${m.tag}</span>` : ""}</span>`;
+}
 
 function sessionLabel(s) {
   const tag = GAME_TAG[s.game] || s.game || "?";
@@ -79,7 +106,7 @@ async function renderHome() {
     ? pbs.map((p) => `<div class="pb-cell">
         <div class="pb-track">${p.track || "?"}</div>
         <div class="pb-time">${fmtLap(p.best_ms)}</div>
-        <div class="pb-game">${GAME_TAG[p.game] || p.game} · ${p.sessions} 場</div>
+        <div class="pb-game">${gameIcon(p.game)} · ${p.sessions} 場</div>
       </div>`).join("")
     : '<div class="pb-empty">還沒有有效圈紀錄。</div>';
 
@@ -89,11 +116,10 @@ async function renderHome() {
     cards.innerHTML = '<div class="pb-empty">還沒有 session——按「開始錄製」進遊戲跑幾圈。</div>';
   } else {
     cards.innerHTML = withLaps.slice().reverse().map((s) => {
-      const tag = GAME_TAG[s.game] || s.game || "?";
       const name = s.label || `${s.track || "?"} · ${s.car_model || "?"}`;
       const when = (s.started_at || "").replace("T", " ");
       return `<div class="session-card" data-id="${s.session_id}">
-        <span class="sc-game">${tag}</span>
+        ${gameIcon(s.game, false)}
         <div class="sc-main"><div class="sc-track">${name}</div>
           <div class="sc-sub">${s.lap_count} 圈 · ${when}</div></div>
         <span class="sc-best">${fmtLap(s.best_ms)}</span>
@@ -1095,6 +1121,42 @@ function renderTrainPanel(st) {
 
 let inFocus = false;
 
+// 當前圈時間平滑跳動：每次輪詢拿到 current_lap_ms 當基準，
+// rAF 用 performance.now() 內插到 ~60fps；連兩次輪詢數值沒變 = 遊戲暫停，凍結。
+let tickBaseMs = 0, tickBaseAt = 0, tickRunning = false, tickLastPollMs = null;
+
+function fmtLapMsRaw(ms) {
+  ms = Math.max(0, Math.floor(ms));
+  const m = Math.floor(ms / 60000), s = Math.floor((ms % 60000) / 1000), mi = ms % 1000;
+  return `${m}:${String(s).padStart(2, "0")}.${String(mi).padStart(3, "0")}`;
+}
+
+function tickLoop() {
+  if (!tickRunning) return;
+  const el = $("focus-cur-time");
+  if (el && !$("focus-view").hidden) {
+    el.textContent = fmtLapMsRaw(tickBaseMs + (performance.now() - tickBaseAt));
+  }
+  requestAnimationFrame(tickLoop);
+}
+
+function syncTicker(ms) {
+  if (ms == null) { stopTicker(); return; }
+  const stalled = tickLastPollMs !== null && ms === tickLastPollMs;
+  tickLastPollMs = ms;
+  tickBaseMs = ms;
+  tickBaseAt = performance.now();
+  if (stalled) {                       // 暫停/停在 pit → 凍結顯示，不繼續跑
+    stopTicker();
+    $("focus-cur-time").textContent = fmtLapMsRaw(ms);
+  } else if (!tickRunning) {
+    tickRunning = true;
+    requestAnimationFrame(tickLoop);
+  }
+}
+
+function stopTicker() { tickRunning = false; }
+
 function showFocus() {
   inFocus = true;
   $("home-view").hidden = true;
@@ -1104,6 +1166,8 @@ function showFocus() {
 
 function exitFocus() {
   inFocus = false;
+  stopTicker();
+  tickLastPollMs = null;
   $("focus-view").hidden = true;
   $("focus-target").removeAttribute("data-shown");
 }
@@ -1112,7 +1176,13 @@ function renderFocus(st) {
   const t = st.training;
   $("focus-stage").textContent = "555 訓練" + (t ? " · " + t.stage_label : "");
   $("focus-req").textContent = t ? t.requirement : "等待進入賽道…";
-  $("focus-cur-time").textContent = st.current_time || "--:--.---";
+  // 平滑跳動：有原始毫秒就交給 ticker 內插，否則退回輪詢的格式化字串
+  if (st.phase === "recording" && st.current_lap_ms != null) {
+    syncTicker(st.current_lap_ms);
+  } else {
+    stopTicker();
+    $("focus-cur-time").textContent = st.current_time || "--:--.---";
+  }
   $("focus-lapcount").textContent = `已完成 ${st.laps_saved || 0} 圈`;
 
   // 5 圈進度點（僅在有連續要求的階段）

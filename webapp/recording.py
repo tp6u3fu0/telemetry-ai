@@ -130,6 +130,7 @@ class RecordingService:
                     "current_lap": gfx.completed_laps + 1,
                     "spline_pct": round(gfx.spline_position * 100, 1),
                     "current_time": format_laptime(gfx.current_lap_time_ms),
+                    "current_lap_ms": gfx.current_lap_time_ms,
                     "laps_saved": recorder.laps_saved,
                     "points": recorder.current_point_count,
                     "opp_laps": tracker.laps_saved if tracker else 0,

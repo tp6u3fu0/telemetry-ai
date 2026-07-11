@@ -52,23 +52,94 @@ function sessionLabel(s) {
   return `#${s.session_id} [${tag}] ${base} · ${s.lap_count} laps`;
 }
 
-async function init(keepSelection = false) {
-  const sessions = await fetchJSON("/api/sessions");
+/* ---------- 首頁 / 導覽 ---------- */
+
+let currentView = "home";
+let allSessions = [];
+
+async function init() {
+  currentView = "home";
+  $("home-view").hidden = false;
+  $("dashboard-view").hidden = true;
+  await renderHome();
+}
+
+async function renderHome() {
+  const [sessions, pbs, trainings] = await Promise.all([
+    fetchJSON("/api/sessions"),
+    fetchJSON("/api/personal-bests").catch(() => []),
+    fetchJSON("/api/trainings").catch(() => []),
+  ]);
+  allSessions = sessions;
   const withLaps = sessions.filter((s) => s.lap_count > 0);
+
+  // 個人最佳
+  const pbEl = $("personal-bests");
+  pbEl.innerHTML = pbs.length
+    ? pbs.map((p) => `<div class="pb-cell">
+        <div class="pb-track">${p.track || "?"}</div>
+        <div class="pb-time">${fmtLap(p.best_ms)}</div>
+        <div class="pb-game">${GAME_TAG[p.game] || p.game} · ${p.sessions} 場</div>
+      </div>`).join("")
+    : '<div class="pb-empty">還沒有有效圈紀錄。</div>';
+
+  // session 卡片（新到舊）
+  const cards = $("session-cards");
   if (!withLaps.length) {
-    $("dashboard").style.display = "none";
-    $("empty-state").style.display = "";
-    $("empty-state").textContent = "資料庫沒有圈次資料——按左上角「開始錄製」，進 ACC 跑幾圈。";
-    return;
+    cards.innerHTML = '<div class="pb-empty">還沒有 session——按「開始錄製」進遊戲跑幾圈。</div>';
+  } else {
+    cards.innerHTML = withLaps.slice().reverse().map((s) => {
+      const tag = GAME_TAG[s.game] || s.game || "?";
+      const name = s.label || `${s.track || "?"} · ${s.car_model || "?"}`;
+      const when = (s.started_at || "").replace("T", " ");
+      return `<div class="session-card" data-id="${s.session_id}">
+        <span class="sc-game">${tag}</span>
+        <div class="sc-main"><div class="sc-track">${name}</div>
+          <div class="sc-sub">${s.lap_count} 圈 · ${when}</div></div>
+        <span class="sc-best">${fmtLap(s.best_ms)}</span>
+      </div>`;
+    }).join("");
+    for (const card of cards.querySelectorAll(".session-card")) {
+      card.onclick = () => openSession(Number(card.dataset.id));
+    }
   }
+
+  // 訓練紀錄
+  const sec = $("train-hist-sec");
+  if (trainings.length) {
+    sec.hidden = false;
+    $("training-history").innerHTML = trainings.map((t) => {
+      const total = t.score != null ? t.score : "—";
+      const color = t.score >= 80 ? "var(--gain)" : t.score >= 50 ? "var(--ink)" : "var(--loss)";
+      return `<div class="th-row">
+        <span class="th-score" style="color:${color}">${total}</span>
+        <span class="th-meta">${t.kind} · ${t.track || "?"} · ${(t.created_at || "").replace("T", " ")}</span>
+      </div>`;
+    }).join("");
+  } else {
+    sec.hidden = true;
+  }
+}
+
+async function openSession(sessionId) {
+  currentView = "dashboard";
+  $("home-view").hidden = true;
+  $("dashboard-view").hidden = false;
+  const withLaps = allSessions.filter((s) => s.lap_count > 0);
   const sel = $("session-select");
-  const prev = keepSelection ? sel.value : null;
   sel.innerHTML = withLaps.map((s) =>
     `<option value="${s.session_id}">${sessionLabel(s)}</option>`).join("");
-  const ids = withLaps.map((s) => String(s.session_id));
-  sel.value = prev && ids.includes(prev) ? prev : ids[ids.length - 1];
+  sel.value = String(sessionId);
   sel.onchange = () => loadSession(Number(sel.value));
-  await loadSession(Number(sel.value));
+  await loadSession(sessionId);
+}
+
+function goHome() {
+  init().catch(() => {});
+}
+
+function setupNav() {
+  $("back-home").onclick = goHome;
 }
 
 /* ---------- session 管理 ---------- */
@@ -90,7 +161,7 @@ function setupSessionActions() {
     });
     $("rename-row").hidden = true;
     $("rename-input").value = "";
-    await init(true);
+    await refreshSessions(Number(id));   // 更新選單標籤，留在原 session
   };
   $("delete-btn").onclick = async () => {
     const btn = $("delete-btn");
@@ -110,8 +181,19 @@ function setupSessionActions() {
     btn.classList.remove("confirm");
     const id = $("session-select").value;
     await fetchJSON(`/api/sessions/${id}`, { method: "DELETE" });
-    await init();
+    goHome();   // 刪掉當前 session → 回首頁
   };
+}
+
+async function refreshSessions(keepId) {
+  const sessions = await fetchJSON("/api/sessions");
+  allSessions = sessions;
+  const withLaps = sessions.filter((s) => s.lap_count > 0);
+  const sel = $("session-select");
+  sel.innerHTML = withLaps.map((s) =>
+    `<option value="${s.session_id}">${sessionLabel(s)}</option>`).join("");
+  const ids = withLaps.map((s) => String(s.session_id));
+  sel.value = ids.includes(String(keepId)) ? String(keepId) : ids[ids.length - 1];
 }
 
 /* ---------- 錄製控制 ---------- */
@@ -122,6 +204,17 @@ let lastLapsSaved = 0;
 function setRecordUI(st) {
   const btn = $("record-btn");
   const box = $("record-status");
+  const isTrain = st.mode === "train";
+  const active = st.phase === "waiting" || st.phase === "recording";
+  // 訓練進行時，錄製卡改為唯讀提示（同一個錄製服務不能兩用）
+  if (active && isTrain) {
+    btn.textContent = "訓練進行中";
+    btn.classList.add("armed");
+    btn.disabled = true;
+    box.textContent = "555 訓練使用中——見右側面板";
+    return;
+  }
+  btn.disabled = false;
   if (st.phase === "waiting") {
     btn.textContent = "■ 停止";
     btn.classList.add("armed");
@@ -141,26 +234,27 @@ function setRecordUI(st) {
   } else {
     btn.textContent = "● 開始錄製";
     btn.classList.remove("armed");
-    box.textContent = st.message || "";
+    box.textContent = st.message || "自動偵測 ACC / iRacing / F1 25";
   }
 }
 
 async function pollRecordStatus() {
   const st = await fetchJSON("/api/record/status");
   setRecordUI(st);
+  renderTrainPanel(st);
   const active = st.phase === "waiting" || st.phase === "recording";
   if (active) {
-    // 每存一圈就刷新 session/圈次清單
+    // 每存一圈就刷新首頁 session 卡片（使用者錄製時在首頁看）
     if ((st.laps_saved || 0) !== lastLapsSaved) {
       lastLapsSaved = st.laps_saved || 0;
-      await init(true);
+      if (currentView === "home") await renderHome();
     }
     recordPoll = setTimeout(pollRecordStatus, 1000);
   } else {
     recordPoll = null;
     if (lastLapsSaved > 0 || st.session_id) {
       lastLapsSaved = 0;
-      await init(true);
+      if (currentView === "home") await renderHome();
     }
   }
 }
@@ -174,7 +268,10 @@ function setupRecording() {
       recordPoll = null;
       await pollRecordStatus();
     } else {
-      await fetchJSON("/api/record/start", { method: "POST" });
+      await fetchJSON("/api/record/start", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "record" }),
+      });
       lastLapsSaved = 0;
       pollRecordStatus();
     }
@@ -867,14 +964,143 @@ async function loadSettings() {
   }
 }
 
-function setupSettings() {
-  $("settings-btn").onclick = async () => {
-    const panel = $("settings-panel");
-    panel.hidden = !panel.hidden;
-    if (!panel.hidden) {
-      $("setting-result").textContent = "";
-      await loadSettings().catch(() => {});
+/* ---------- 555 訓練 UI ---------- */
+
+const STAGES = [
+  ["baseline", "基準"], ["beat", "超越"],
+  ["set_target", "目標"], ["achieve", "達標"], ["done", "完成"],
+];
+
+function parseTimeToMs(str) {
+  str = String(str).trim();
+  let m = str.match(/^(\d+):(\d+(?:\.\d+)?)$/);   // M:SS.mmm
+  if (m) return Math.round((Number(m[1]) * 60 + Number(m[2])) * 1000);
+  const sec = Number(str);                         // 純秒數
+  return Number.isFinite(sec) ? Math.round(sec * 1000) : null;
+}
+
+function dots5(filled) {
+  let h = "";
+  for (let i = 0; i < 5; i++) {
+    h += `<div class="dot5 ${i < filled ? "filled" : ""}">${i < filled ? "✓" : i + 1}</div>`;
+  }
+  return h;
+}
+
+function renderTrainPanel(st) {
+  const panel = $("train-panel");
+  const startBtn = $("train-start");
+  const active = (st.phase === "waiting" || st.phase === "recording");
+  const t = st.training;
+
+  if (!active || st.mode !== "train" || !t) {
+    // 非訓練狀態：顯示提示 + 「開始」；若剛完成則保留分數在訓練紀錄區
+    startBtn.textContent = "開始";
+    startBtn.disabled = active && st.mode !== "train";  // 一般錄製中不能開訓練
+    panel.innerHTML =
+      '<div class="train-hint">連續 5 圈零失誤 → 5 圈超越均速 → 設目標 → 達標 5 圈</div>';
+    if (active && st.mode !== "train") {
+      panel.innerHTML = '<div class="train-hint">錄製進行中，停止後才能開始訓練。</div>';
     }
+    return;
+  }
+
+  startBtn.textContent = "停止";
+  startBtn.disabled = false;
+
+  // 階段指示
+  let pips = STAGES.map(([key, label]) => {
+    const idx = STAGES.findIndex((s) => s[0] === t.stage);
+    const myIdx = STAGES.findIndex((s) => s[0] === key);
+    const cls = key === t.stage ? "active" : myIdx < idx ? "done" : "";
+    return `<div class="stage-pip ${cls}">${label}</div>`;
+  }).join("");
+
+  let body = `<div class="stage-row">${pips}</div>
+    <div class="train-req">${t.requirement}</div>`;
+
+  if (t.stage === "baseline") {
+    body += `<div class="train-progress">${dots5(t.baseline_progress)}</div>`;
+  } else if (t.stage === "beat") {
+    body += `<div class="train-progress">${dots5(t.beat_progress)}</div>`;
+  } else if (t.stage === "set_target") {
+    const sugSec = (t.suggested_target / 1000).toFixed(3);
+    body += `<div class="train-target-row">
+      <input id="train-target-input" value="${sugSec}" placeholder="秒數，如 88.5 或 1:28.5">
+      <button id="train-target-set" class="mini-btn">設定</button></div>
+      <div class="train-hint">建議 ${fmtLap(t.suggested_target)}（超越均速快 0.5 秒）</div>`;
+  } else if (t.stage === "achieve") {
+    body += `<div class="train-progress">${dots5(t.achieve_progress)}</div>
+      <div class="train-hint">目標 ${fmtLap(t.target_ms)} · 已嘗試 ${t.achieve_attempts} 圈</div>`;
+  } else if (t.stage === "done" && t.score) {
+    const s = t.score;
+    body += `<div class="train-score">
+      <div class="sc-item sc-total"><div class="sc-num">${s.total}</div><div class="sc-lbl">總分</div></div>
+      <div class="sc-item"><div class="sc-num">${s.consistency}</div><div class="sc-lbl">一致性</div></div>
+      <div class="sc-item"><div class="sc-num">${s.improvement}</div><div class="sc-lbl">進步</div></div>
+      <div class="sc-item"><div class="sc-num">${s.ambition}</div><div class="sc-lbl">企圖心</div></div>
+      <div class="sc-item"><div class="sc-num">${s.efficiency}</div><div class="sc-lbl">效率</div></div>
+    </div>`;
+  }
+
+  // 最近幾圈
+  if (t.recent && t.recent.length) {
+    body += '<div class="train-recent">' + t.recent.map((r) => {
+      const cls = r.good ? "lap-ok" : "lap-bad";
+      const time = r.time_ms ? fmtLap(r.time_ms) : "無效";
+      return `<span class="${cls}">${time}</span>`;
+    }).join(" · ") + "</div>";
+  }
+
+  panel.innerHTML = body;
+
+  if (t.stage === "set_target") {
+    $("train-target-set").onclick = async () => {
+      const ms = parseTimeToMs($("train-target-input").value);
+      if (!ms) return;
+      await fetchJSON("/api/train/target", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ms }),
+      }).catch(() => {});
+    };
+  }
+}
+
+function setupTraining() {
+  $("train-start").onclick = async () => {
+    const st = await fetchJSON("/api/record/status");
+    const active = st.phase === "waiting" || st.phase === "recording";
+    if (active && st.mode === "train") {
+      await fetchJSON("/api/record/stop", { method: "POST" });
+      if (recordPoll) clearTimeout(recordPoll);
+      recordPoll = null;
+      await pollRecordStatus();
+      if (currentView === "home") await renderHome();
+    } else if (!active) {
+      await fetchJSON("/api/record/start", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "train" }),
+      });
+      lastLapsSaved = 0;
+      pollRecordStatus();
+    }
+  };
+}
+
+/* ---------- 設定 modal ---------- */
+
+function openSettings() {
+  $("settings-overlay").hidden = false;
+  $("setting-result").textContent = "";
+  loadSettings().catch(() => {});
+}
+
+function setupSettings() {
+  $("settings-btn").onclick = openSettings;
+  $("dash-settings-btn").onclick = openSettings;
+  $("settings-close").onclick = () => { $("settings-overlay").hidden = true; };
+  $("settings-overlay").onclick = (e) => {
+    if (e.target === $("settings-overlay")) $("settings-overlay").hidden = true;
   };
   $("setting-save").onclick = async () => {
     const result = $("setting-result");
@@ -911,11 +1137,14 @@ function setupSettings() {
   };
 }
 
+setupNav();
 setupSessionActions();
 setupRecording();
+setupTraining();
 setupSpeedMode();
 setupCoach();
 setupSettings();
 init().catch((err) => {
-  $("empty-state").textContent = "初始化失敗：" + err.message;
+  $("session-cards").innerHTML =
+    '<div class="pb-empty">初始化失敗：' + err.message + "</div>";
 });

@@ -32,6 +32,143 @@ body {
 
 .layout { display: flex; min-height: 100vh; }
 
+/* ===== 首頁 ===== */
+#home-view { max-width: 1000px; margin: 0 auto; padding: 28px 24px 60px; }
+.home-head {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 24px;
+}
+.home-head h1 {
+  font-size: 20px; letter-spacing: 2px; margin: 0; color: var(--ink); font-weight: 700;
+}
+.home-actions {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 28px;
+}
+.action-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px; padding: 18px;
+}
+.action-card-title {
+  font-size: 13px; color: var(--ink-2); margin-bottom: 12px; font-weight: 600;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.home-sec { margin-bottom: 24px; }
+.home-sec h2 {
+  font-size: 13px; color: var(--muted); letter-spacing: 1px;
+  text-transform: uppercase; margin: 0 0 10px;
+}
+
+/* 個人最佳 */
+.pb-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px;
+}
+.pb-cell {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 10px 12px;
+}
+.pb-track { font-size: 12px; color: var(--ink-2); }
+.pb-time { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.pb-game { font-size: 10px; color: var(--muted); }
+.pb-empty { color: var(--muted); font-size: 13px; }
+
+/* session 卡片 */
+.session-cards { display: flex; flex-direction: column; gap: 8px; }
+.session-card {
+  display: flex; align-items: center; gap: 12px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; padding: 12px 16px; cursor: pointer;
+  transition: border-color 0.15s, transform 0.1s;
+}
+.session-card:hover { border-color: var(--baseline); transform: translateX(2px); }
+.session-card .sc-game {
+  font-size: 10px; font-weight: 700; padding: 3px 7px; border-radius: 6px;
+  background: var(--surface-2); color: var(--ink-2); flex: none;
+}
+.session-card .sc-main { flex: 1; min-width: 0; }
+.session-card .sc-track { font-size: 14px; color: var(--ink); }
+.session-card .sc-sub { font-size: 11px; color: var(--muted); }
+.session-card .sc-best {
+  font-size: 15px; font-weight: 700; color: var(--series-a);
+  font-variant-numeric: tabular-nums; flex: none;
+}
+.session-card .sc-actions { display: flex; gap: 6px; flex: none; }
+
+/* 訓練紀錄 */
+.training-history { display: flex; flex-direction: column; gap: 6px; }
+.th-row {
+  display: flex; align-items: center; gap: 12px; font-size: 12px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 12px;
+}
+.th-score {
+  font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums;
+  width: 44px; text-align: center;
+}
+.th-row .th-meta { color: var(--muted); flex: 1; }
+
+/* ===== 設定 modal ===== */
+.modal-overlay {
+  position: fixed; inset: 0; background: rgba(0, 0, 0, 0.6);
+  display: flex; align-items: center; justify-content: center; z-index: 100;
+}
+.modal-overlay[hidden] { display: none; }
+.modal {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px; padding: 20px; width: 360px; max-width: 90vw;
+}
+.modal-head {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 15px; font-weight: 600; color: var(--ink); margin-bottom: 14px;
+}
+.modal input[type="password"], .modal select {
+  width: 100%; padding: 8px 10px; font-size: 13px;
+  background: var(--page); color: var(--ink);
+  border: 1px solid var(--border); border-radius: 6px;
+}
+.modal input:focus, .modal select:focus { outline: none; border-color: var(--series-a); }
+
+/* ===== 555 訓練面板 ===== */
+.train-hint { font-size: 11px; color: var(--muted); line-height: 1.6; }
+.train-panel .stage-row {
+  display: flex; gap: 6px; margin: 6px 0 10px;
+}
+.train-panel .stage-pip {
+  flex: 1; text-align: center; font-size: 10px; padding: 4px 0;
+  border-radius: 6px; background: var(--surface-2); color: var(--muted);
+  border: 1px solid var(--border);
+}
+.train-panel .stage-pip.active {
+  background: rgba(57, 135, 229, 0.18); color: var(--ink);
+  border-color: var(--series-a);
+}
+.train-panel .stage-pip.done { color: var(--gain); border-color: var(--gain); }
+.train-req { font-size: 13px; color: var(--ink); margin-bottom: 8px; }
+.train-progress {
+  display: flex; gap: 4px; margin-bottom: 10px;
+}
+.train-progress .dot5 {
+  width: 20px; height: 20px; border-radius: 50%;
+  background: var(--surface-2); border: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 10px; color: var(--muted);
+}
+.train-progress .dot5.filled { background: var(--gain); color: #fff; border-color: var(--gain); }
+.train-target-row { display: flex; gap: 6px; margin-bottom: 8px; }
+.train-target-row input {
+  flex: 1; padding: 6px 8px; font-size: 13px;
+  background: var(--page); color: var(--ink);
+  border: 1px solid var(--border); border-radius: 6px;
+  font-variant-numeric: tabular-nums;
+}
+.train-score { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
+.train-score .sc-item { text-align: center; }
+.train-score .sc-num { font-size: 20px; font-weight: 700; }
+.train-score .sc-lbl { font-size: 10px; color: var(--muted); }
+.train-score .sc-total .sc-num { color: var(--series-a); font-size: 28px; }
+.train-recent { font-size: 11px; color: var(--muted); margin-top: 8px; }
+.train-recent .lap-ok { color: var(--gain); }
+.train-recent .lap-bad { color: var(--loss); }
+
 /* ---- 側欄 ---- */
 .sidebar {
   width: 280px; flex: none;

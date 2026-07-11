@@ -48,6 +48,15 @@ CREATE TABLE IF NOT EXISTS coach_chats (
     messages   TEXT NOT NULL,                -- JSON: [{role, content}, ...]
     PRIMARY KEY (lap_a, lap_b)
 );
+
+CREATE TABLE IF NOT EXISTS trainings (
+    training_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id  INTEGER NOT NULL REFERENCES sessions(session_id),
+    created_at  TEXT NOT NULL,
+    kind        TEXT NOT NULL DEFAULT '555',
+    score       INTEGER,                     -- 總分（NULL = 未完成）
+    result      TEXT NOT NULL                -- JSON: 完整 state()
+);
 """
 
 # telemetry_points 的完整欄位順序（save_lap 的 points tuple 依此排列，
@@ -129,8 +138,12 @@ class TelemetryDB:
     # -- 查詢 ---------------------------------------------------------------
 
     def list_sessions(self) -> list:
+        # lap_count 只計玩家自己的圈；best_ms 為玩家最快有效完整圈
         return self.conn.execute(
-            "SELECT s.*, COUNT(l.lap_id) AS lap_count "
+            "SELECT s.*, "
+            "COUNT(CASE WHEN l.driver IS NULL THEN 1 END) AS lap_count, "
+            "MIN(CASE WHEN l.driver IS NULL AND l.is_valid = 1 "
+            "  AND l.is_complete = 1 THEN l.lap_time_ms END) AS best_ms "
             "FROM sessions s LEFT JOIN laps l ON l.session_id = s.session_id "
             "GROUP BY s.session_id ORDER BY s.session_id").fetchall()
 
@@ -183,6 +196,41 @@ class TelemetryDB:
             "DELETE FROM coach_chats WHERE lap_a = ? AND lap_b = ?",
             (lap_a, lap_b or 0))
         self.conn.commit()
+
+    # -- 訓練紀錄 -----------------------------------------------------------
+
+    def save_training(self, session_id: int, kind: str, score, result: dict) -> int:
+        cur = self.conn.execute(
+            "INSERT INTO trainings (session_id, created_at, kind, score, result) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (session_id, datetime.now().isoformat(timespec="seconds"), kind,
+             score, json.dumps(result, ensure_ascii=False)))
+        self.conn.commit()
+        return cur.lastrowid
+
+    def list_trainings(self, limit: int = 10) -> list:
+        rows = self.conn.execute(
+            "SELECT t.*, s.track, s.game FROM trainings t "
+            "JOIN sessions s ON s.session_id = t.session_id "
+            "ORDER BY t.training_id DESC LIMIT ?", (limit,)).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["result"] = json.loads(d["result"])
+            out.append(d)
+        return out
+
+    # -- 個人最佳 -----------------------------------------------------------
+
+    def personal_bests(self) -> list:
+        """每條賽道玩家自己最快的有效完整圈。"""
+        return self.conn.execute(
+            "SELECT s.game, s.track, MIN(l.lap_time_ms) AS best_ms, "
+            "COUNT(DISTINCT s.session_id) AS sessions "
+            "FROM laps l JOIN sessions s ON s.session_id = l.session_id "
+            "WHERE l.driver IS NULL AND l.is_valid = 1 AND l.is_complete = 1 "
+            "AND l.lap_time_ms IS NOT NULL "
+            "GROUP BY s.game, s.track ORDER BY best_ms").fetchall()
 
     def best_lap(self, session_id: int):
         """該 session 玩家自己最快的有效完整圈（不含對手圈）。"""

@@ -13,6 +13,7 @@ from data_store.opponents import OpponentTracker
 from data_store.recorder import LapRecorder
 from sources import detect_live, open_all
 from telemetry_listener.live_console import format_laptime
+from training.five55 import Five55, Stage
 
 _HZ = 50.0
 
@@ -22,20 +23,32 @@ class RecordingService:
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self.status: dict = {"phase": "idle"}
+        self._training: Five55 | None = None
+        self._train_lock = threading.Lock()
 
     @property
     def active(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
 
-    def start(self, db_path: str) -> tuple[bool, str]:
+    def start(self, db_path: str, mode: str = "record") -> tuple[bool, str]:
         if self.active:
             return False, "已在錄製中"
         self._stop.clear()
-        self.status = {"phase": "waiting"}
+        self._training = Five55() if mode == "train" else None
+        self.status = {"phase": "waiting", "mode": mode}
         self._thread = threading.Thread(target=self._run, args=(db_path,),
                                         daemon=True)
         self._thread.start()
         return True, "已開始"
+
+    def set_target(self, target_ms: int) -> tuple[bool, str]:
+        with self._train_lock:
+            if self._training is None:
+                return False, "沒有進行中的訓練"
+            if self._training.set_target(target_ms):
+                self.status["training"] = self._training.state()
+                return True, "目標已設定"
+            return False, "現在不是設定目標的階段"
 
     def stop(self) -> tuple[bool, str]:
         if not self.active:
@@ -74,6 +87,7 @@ class RecordingService:
                 player=static.player_name, session_type=gfx.session_type,
                 game=reader.game)
             recorder = LapRecorder(db, session_id)
+            self._train_saved = False
             # 對手遙測（reader 有支援才啟用；F1 25 / iRacing）
             tracker = None
             if hasattr(reader, "read_opponents"):
@@ -86,6 +100,15 @@ class RecordingService:
                 self.status["last_lap"] = (
                     f"Lap {n}: {format_laptime(t)}"
                     f"{'' if valid else '（無效）'}")
+                if self._training is not None:
+                    with self._train_lock:
+                        self._training.push_lap(t, valid)
+                        self.status["training"] = self._training.state()
+                        if self._training.stage == Stage.DONE and not self._train_saved:
+                            db.save_training(session_id, "555",
+                                             self._training.score["total"],
+                                             self._training.state())
+                            self._train_saved = True
 
             recorder.on_lap_saved = on_lap
             period = 1.0 / _HZ
@@ -111,6 +134,8 @@ class RecordingService:
                     "points": recorder.current_point_count,
                     "opp_laps": tracker.laps_saved if tracker else 0,
                 })
+                if self._training is not None and "training" not in self.status:
+                    self.status["training"] = self._training.state()
                 time.sleep(period)
 
             recorder.finalize()

@@ -320,8 +320,37 @@ def api_test_settings():
 
 @app.post("/api/record/start")
 def api_record_start():
-    ok, msg = recording_service.start(app.config["DB_PATH"])
+    body = request.get_json(silent=True) or {}
+    mode = body.get("mode", "record")
+    ok, msg = recording_service.start(app.config["DB_PATH"], mode=mode)
     return jsonify({"ok": ok, "message": msg}), (200 if ok else 409)
+
+
+@app.post("/api/train/target")
+def api_train_target():
+    ms = (request.get_json(silent=True) or {}).get("ms")
+    if not ms:
+        return jsonify({"ok": False, "message": "需要 ms"}), 400
+    ok, msg = recording_service.set_target(int(ms))
+    return jsonify({"ok": ok, "message": msg}), (200 if ok else 409)
+
+
+@app.get("/api/trainings")
+def api_trainings():
+    db = _db()
+    try:
+        return jsonify(db.list_trainings())
+    finally:
+        db.close()
+
+
+@app.get("/api/personal-bests")
+def api_personal_bests():
+    db = _db()
+    try:
+        return jsonify([dict(r) for r in db.personal_bests()])
+    finally:
+        db.close()
 
 
 @app.post("/api/record/stop")

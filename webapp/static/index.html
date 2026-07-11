@@ -9,36 +9,66 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+
+<!-- 設定 modal（首頁與儀表板共用） -->
+<div id="settings-overlay" class="modal-overlay" hidden>
+  <div class="modal">
+    <div class="modal-head"><span>設定</span>
+      <button id="settings-close" class="icon-btn" title="關閉">✕</button></div>
+    <div class="field-label">Claude API 金鑰</div>
+    <input id="setting-api-key" type="password" placeholder="sk-ant-..."
+           autocomplete="off">
+    <div id="setting-key-status" class="setting-status"></div>
+    <div class="field-label" style="margin-top:10px">教練模型</div>
+    <select id="setting-model">
+      <option value="claude-sonnet-5">Sonnet 5（推薦，品質/成本平衡）</option>
+      <option value="claude-opus-4-8">Opus 4.8（最強，較貴）</option>
+      <option value="claude-haiku-4-5">Haiku 4.5（最快最省）</option>
+    </select>
+    <div class="settings-actions">
+      <button id="setting-save" class="mini-btn">儲存</button>
+      <button id="setting-test" class="mini-btn">測試連線</button>
+    </div>
+    <div id="setting-result" class="setting-status"></div>
+  </div>
+</div>
+
+<!-- 首頁 -->
+<div id="home-view">
+  <header class="home-head">
+    <h1>🏁 SIM RACING TELEMETRY</h1>
+    <button id="settings-btn" class="icon-btn" title="設定">⚙</button>
+  </header>
+  <div class="home-actions">
+    <div class="action-card">
+      <div class="action-card-title">錄製遙測</div>
+      <button id="record-btn" class="record-btn">● 開始錄製</button>
+      <div id="record-status" class="record-status">
+        自動偵測 ACC / iRacing / F1 25</div>
+    </div>
+    <div class="action-card" id="train-card">
+      <div class="action-card-title">🏁 555 訓練
+        <button id="train-start" class="mini-btn inline">開始</button></div>
+      <div id="train-panel" class="train-panel">
+        <div class="train-hint">連續 5 圈零失誤 → 5 圈超越均速 → 設目標 → 達標 5 圈</div>
+      </div>
+    </div>
+  </div>
+  <section class="home-sec"><h2>個人最佳</h2>
+    <div id="personal-bests" class="pb-grid"></div></section>
+  <section class="home-sec"><h2>Session</h2>
+    <div id="session-cards" class="session-cards"></div></section>
+  <section class="home-sec" id="train-hist-sec" hidden><h2>訓練紀錄</h2>
+    <div id="training-history" class="training-history"></div></section>
+</div>
+
+<!-- 儀表板 -->
+<div id="dashboard-view" hidden>
 <div class="layout">
   <aside class="sidebar">
     <div class="sidebar-head">
-      <h1>ACC TELEMETRY</h1>
-      <button id="settings-btn" class="icon-btn" title="設定">⚙</button>
-    </div>
-
-    <div id="settings-panel" class="settings-panel" hidden>
-      <div class="field-label">Claude API 金鑰</div>
-      <input id="setting-api-key" type="password" placeholder="sk-ant-..."
-             autocomplete="off">
-      <div id="setting-key-status" class="setting-status"></div>
-
-      <div class="field-label" style="margin-top:10px">教練模型</div>
-      <select id="setting-model">
-        <option value="claude-sonnet-5">Sonnet 5（推薦，品質/成本平衡）</option>
-        <option value="claude-opus-4-8">Opus 4.8（最強，較貴）</option>
-        <option value="claude-haiku-4-5">Haiku 4.5（最快最省）</option>
-      </select>
-
-      <div class="settings-actions">
-        <button id="setting-save" class="mini-btn">儲存</button>
-        <button id="setting-test" class="mini-btn">測試連線</button>
-      </div>
-      <div id="setting-result" class="setting-status"></div>
-    </div>
-
-    <div class="record-block">
-      <button id="record-btn" class="record-btn">● 開始錄製</button>
-      <div id="record-status" class="record-status"></div>
+      <button id="back-home" class="mini-btn">← 首頁</button>
+      <button id="dash-settings-btn" class="icon-btn" title="設定">⚙</button>
     </div>
 
     <label class="field-label" for="session-select">Session</label>
@@ -157,6 +187,7 @@
       </section>
     </div>
   </main>
+</div>
 </div>
 <script src="vendor/uPlot.iife.min.js"></script>
 <script src="app.js"></script>

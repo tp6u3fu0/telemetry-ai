@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import math
 import re
+import time
 
 from data_store.opponents import OpponentSample
 from telemetry_listener.shared_memory import (GraphicsSnapshot,
@@ -54,6 +55,13 @@ class IRacingReader:
         # 不能用 PlayerTrackSurface——輾過路緣石就會瞬間變 OffTrack，並非切彎。
         self._last_completed = None
         self._inc_base = 0
+        # session-info YAML 解析很貴（尤其滿場車），快取 2 秒——名單/session
+        # 型別幾乎不變。不快取的話每次迴圈重解析會把錄製拖到 ~15Hz。
+        self._names_cache = {}
+        self._player_idx = None
+        self._names_at = -99.0
+        self._stype_cache = 0
+        self._stype_at = -99.0
 
     def close(self) -> None:
         if not self._external:
@@ -141,13 +149,18 @@ class IRacingReader:
         return self._dr_x, self._dr_y
 
     def _session_type(self) -> int:
+        now = time.monotonic()
+        if now - self._stype_at < 2.0:
+            return self._stype_cache
         try:
             num = self._get("SessionNum", 0) or 0
             sessions = self.ir["SessionInfo"]["Sessions"]
             name = str(sessions[num]["SessionType"]).lower()
-            return _SESSION_TYPE.get(name, 0)
+            self._stype_cache = _SESSION_TYPE.get(name, 0)
         except Exception:
-            return 0
+            pass
+        self._stype_at = now
+        return self._stype_cache
 
     def read_graphics(self) -> GraphicsSnapshot:
         self._freeze()
@@ -193,14 +206,20 @@ class IRacingReader:
             return 0.0
 
     def _driver_names(self) -> dict:
-        """carIdx -> 車手名（pace car 排除）。"""
+        """carIdx -> 車手名（pace car 排除）。快取 2 秒，避免每迴圈重解析 YAML。"""
+        now = time.monotonic()
+        if now - self._names_at < 2.0:
+            return self._names_cache
         try:
             info = self.ir["DriverInfo"]
-            return {d["CarIdx"]: str(d.get("UserName") or f"Car {d['CarIdx']}")
-                    for d in info["Drivers"]
-                    if not d.get("CarIsPaceCar")}
+            self._player_idx = info.get("DriverCarIdx")
+            self._names_cache = {
+                d["CarIdx"]: str(d.get("UserName") or f"Car {d['CarIdx']}")
+                for d in info["Drivers"] if not d.get("CarIsPaceCar")}
         except Exception:
-            return {}
+            pass
+        self._names_at = now
+        return self._names_cache
 
     def read_opponents(self) -> list:
         """CarIdx 陣列：spline/圈速/檔位/轉速。iRacing 不提供對手踏板；
@@ -209,25 +228,21 @@ class IRacingReader:
         pcts = self._get("CarIdxLapDistPct")
         if not pcts:
             return []
-        player = None
-        try:
-            player = self.ir["DriverInfo"]["DriverCarIdx"]
-        except Exception:
-            pass
+        names = self._driver_names()      # 也刷新 _player_idx（快取）
+        player = self._player_idx
         completed = self._get("CarIdxLapCompleted") or []
         last_times = self._get("CarIdxLastLapTime") or []
         gears = self._get("CarIdxGear") or []
         rpms = self._get("CarIdxRPM") or []
         pits = self._get("CarIdxOnPitRoad") or []
         surfaces = self._get("CarIdxTrackSurface") or []
-        names = self._driver_names()
         out = []
         for i, pct in enumerate(pcts):
             if i == player or i not in names:
                 continue
             surface = surfaces[i] if i < len(surfaces) else -1
             if surface is None or surface < 0 or pct is None or pct < 0:
-                continue    # 不在世界中
+                continue    # 不在世界中（NotInWorld）
             last_s = last_times[i] if i < len(last_times) else 0
             out.append(OpponentSample(
                 car_key=f"ir_{i}",
@@ -239,7 +254,9 @@ class IRacingReader:
                 gear=int(gears[i]) if i < len(gears) else None,
                 rpm=int(rpms[i]) if i < len(rpms) else None,
                 in_pit=bool(pits[i]) if i < len(pits) else False,
-                on_track=surface >= 1,
+                # 已在世界中（surface>=0）就取樣；不因壓路緣石的瞬間
+                # OffTrack(0) 漏掉——那會讓對手資料變稀疏。
+                on_track=True,
             ))
         return out
 

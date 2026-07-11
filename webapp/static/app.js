@@ -12,7 +12,8 @@ const SYNC_KEY = "acc-telemetry";
 const $ = (id) => document.getElementById(id);
 let charts = [];
 let currentZones = [];
-let mapState = null;       // {x, y, delta, bounds} 賽道地圖資料
+let mapState = null;       // 地圖繪製狀態（游標點用）
+let lastMapArgs = null;    // 最後一次 renderMap 的參數（resize 重繪用）
 let syncingScale = false;  // 防止 x 軸縮放同步遞迴
 let lastData = null;       // 最近一次 /api/compare 的回應（重建圖表用）
 let speedMode = "overlay"; // "overlay" = 兩線疊圖, "diff" = 差值
@@ -124,7 +125,7 @@ function setRecordUI(st) {
   if (st.phase === "waiting") {
     btn.textContent = "■ 停止";
     btn.classList.add("armed");
-    box.textContent = "等待遊戲進入賽道…（支援 ACC / iRacing，自動偵測）";
+    box.textContent = "等待遊戲進入賽道…（支援 ACC / iRacing / F1 25，自動偵測）";
   } else if (st.phase === "recording") {
     btn.textContent = "■ 停止錄製";
     btn.classList.add("armed");
@@ -321,6 +322,7 @@ function seriesPair(labelA, labelB, { dash, width = 1.2 } = {}) {
 /* ---------- 賽道地圖 ---------- */
 
 function renderMap(d, single = false) {
+  lastMapArgs = { d, single };
   const card = $("map-card");
   const spanOK = d.map_x && d.map_y &&
     (Math.max(...d.map_x) - Math.min(...d.map_x) > 10 ||
@@ -723,11 +725,17 @@ function renderZones(zones, worst) {
   bindZoneRowClicks(tbody);
 }
 
+let resizeTimer = null;
 window.addEventListener("resize", () => {
   for (const c of charts) {
     const el = c.root.parentElement;
     c.setSize({ width: el.clientWidth, height: c.height });
   }
+  // 地圖是點陣 canvas，尺寸變了必須重繪，否則被瀏覽器拉伸變形
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    if (lastMapArgs) renderMap(lastMapArgs.d, lastMapArgs.single);
+  }, 150);
 });
 
 /* ---------- AI 教練 ---------- */

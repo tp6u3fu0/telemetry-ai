@@ -9,7 +9,11 @@
 |---|---|---|
 | Assetto Corsa Competizione | Shared Memory + Broadcasting UDP | ✅ |
 | iRacing | 官方 SDK（pyirsdk） | ✅ |
-| F1 25 | 官方 UDP 遙測 | 規劃中 |
+| F1 25 | 官方 UDP 遙測（port 20777） | ✅ |
+
+F1 25 需在遊戲內開啟：設定 → 遙測設定 → **UDP Telemetry = On**（port 20777、
+格式 2025、broadcast 或填本機 IP）。Motion 封包提供真實世界座標，賽道地圖開箱即用；
+trackId 自動對應賽道名（Monza、Spa、Suzuka…）。
 
 按「開始錄製」後自動偵測哪個遊戲在賽道上，session 以 `[ACC]` / `[iR]` 標籤區分。
 iRacing 對應：`LapDistPct` → spline、GPS 經緯度 → 賽道地圖座標、

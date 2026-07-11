@@ -12,9 +12,10 @@ Reader 介面（duck typing，型別沿用 telemetry_listener.shared_memory 的 
 from __future__ import annotations
 
 from .acc import ACCReader
+from .f1_25 import F1Reader
 from .iracing import IRacingReader
 
-ALL_SOURCES = [ACCReader, IRacingReader]
+ALL_SOURCES = [ACCReader, IRacingReader, F1Reader]
 
 
 def open_all() -> list:

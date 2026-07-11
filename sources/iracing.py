@@ -50,6 +50,10 @@ class IRacingReader:
         self._dr_x = 0.0
         self._dr_y = 0.0
         self._dr_t = None
+        # 有效圈以「事故計數」判定：一圈內事故數增加才算失誤（出界/接觸）。
+        # 不能用 PlayerTrackSurface——輾過路緣石就會瞬間變 OffTrack，並非切彎。
+        self._last_completed = None
+        self._inc_base = 0
 
     def close(self) -> None:
         if not self._external:
@@ -148,8 +152,16 @@ class IRacingReader:
     def read_graphics(self) -> GraphicsSnapshot:
         self._freeze()
         on_track = bool(self._get("IsOnTrack", False))
-        surface = int(self._get("PlayerTrackSurface", _NOT_IN_WORLD)
-                      if self._get("PlayerTrackSurface") is not None else _NOT_IN_WORLD)
+        surface_raw = self._get("PlayerTrackSurface")
+        surface = int(surface_raw) if surface_raw is not None else _NOT_IN_WORLD
+        completed = max(0, int(self._get("LapCompleted", 0) or 0))
+        # 事故計數：每過線（LapCompleted 變動）重設本圈基準；本圈事故數增加=失誤
+        inc = int(self._get("PlayerCarMyIncidentCount", 0) or 0)
+        if self._last_completed is None or completed != self._last_completed:
+            self._inc_base = inc
+            self._last_completed = completed
+        clean = inc <= self._inc_base
+
         cur_s = self._get("LapCurrentLapTime", 0.0) or 0.0
         last_s = self._get("LapLastLapTime", 0.0) or 0.0
         best_s = self._get("LapBestLapTime", 0.0) or 0.0
@@ -158,12 +170,13 @@ class IRacingReader:
             packet_id=int(self._get("SessionTick", 0) or 0),
             status=2 if on_track else 0,          # 2 = LIVE（與 ACC 慣例一致）
             session_type=self._session_type(),
-            completed_laps=max(0, int(self._get("LapCompleted", 0) or 0)),
+            completed_laps=completed,
             current_lap_time_ms=max(0, int(cur_s * 1000)),
             last_lap_time_ms=max(0, int(last_s * 1000)),
             best_lap_time_ms=max(0, int(best_s * 1000)),
             spline_position=float(self._get("LapDistPct", 0.0) or 0.0),
-            is_valid_lap=surface not in (_NOT_IN_WORLD, _OFF_TRACK),
+            # 有效 = 本圈零事故 且 車在世界中（不含路緣石造成的瞬間 OffTrack）
+            is_valid_lap=clean and surface != _NOT_IN_WORLD,
             is_in_pit=bool(self._get("OnPitRoad", False)),
             current_sector=0,                     # iRacing 不直接提供，分析端不依賴
             world_x=wx,

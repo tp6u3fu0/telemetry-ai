@@ -35,6 +35,7 @@ class FakeIR:
             "LapBestLapTime": 91.2,
             "IsOnTrack": True, "OnPitRoad": False,
             "PlayerTrackSurface": 3,       # onTrack
+            "PlayerCarMyIncidentCount": 0,
             "SessionNum": 0,
             "WeekendInfo": {"TrackName": "okayama full",
                             "TrackDisplayName": "Okayama International"},
@@ -95,10 +96,26 @@ def main() -> int:
         failures.append(f"航位推算 yaw 方向錯: dx={g2.world_x - g1.world_x}")
 
     # 出界 → 無效圈；NotInWorld 也無效
-    fake.vars["PlayerTrackSurface"] = 0
-    if r.read_graphics().is_valid_lap:
-        failures.append("offTrack 應為無效圈")
+    # 事故計數：壓路緣石造成的瞬間 OffTrack 不算失誤（valid 仍為真）
+    fake.vars["PlayerTrackSurface"] = 0        # OffTrack 材質（如路緣石）
+    if not r.read_graphics().is_valid_lap:
+        failures.append("壓路緣石（OffTrack 材質但無事故）不應判無效")
     fake.vars["PlayerTrackSurface"] = 3
+    # 事故數增加 → 本圈失誤
+    fake.vars["PlayerCarMyIncidentCount"] = 1
+    if r.read_graphics().is_valid_lap:
+        failures.append("事故數增加後本圈應無效")
+    # 過線（LapCompleted 變動）後事故基準重設 → 新圈乾淨
+    fake.vars["LapCompleted"] = 1
+    if not r.read_graphics().is_valid_lap:
+        failures.append("過線後事故基準應重設，新圈為有效")
+    # NotInWorld 仍無效
+    fake.vars["PlayerTrackSurface"] = -1
+    if r.read_graphics().is_valid_lap:
+        failures.append("NotInWorld 應為無效")
+    fake.vars["PlayerTrackSurface"] = 3
+    fake.vars["LapCompleted"] = 0
+    fake.vars["PlayerCarMyIncidentCount"] = 0
 
     s = r.read_static()
     if s.track != "Okayama International" or s.car_model != "MX-5" or s.player_name != "Chen":
@@ -130,9 +147,9 @@ def main() -> int:
     laps = db.list_laps(sid)
     if len(laps) < 1 or not laps[0]["is_valid"]:
         failures.append(f"iRacing 圈錄製錯: {[dict(l) for l in laps]}")
-    # fallback 圈速 = 最後緩衝點 91980 − 已進行 1500 = 90480ms（±一個取樣）
+    # fallback 圈速 = 最後緩衝點的圈內時間 ≈ lap_ms - 一個取樣（91980）
     got = laps[0]["lap_time_ms"] or 0
-    if abs(got - (lap_ms - 20 - 1500)) > 50:
+    if abs(got - (lap_ms - 20)) > 50:
         failures.append(f"圈速 fallback 推算錯: {got}")
     game = db.conn.execute("SELECT game FROM sessions WHERE session_id=?",
                            (sid,)).fetchone()["game"]

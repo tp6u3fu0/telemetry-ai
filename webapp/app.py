@@ -32,6 +32,18 @@ def _db() -> TelemetryDB:
     return TelemetryDB(app.config["DB_PATH"])
 
 
+@app.errorhandler(Exception)
+def _json_errors(exc):
+    # 任何未攔截例外都回 JSON（前端 fetchJSON 才不會拿到 HTML 錯誤頁而爆
+    # "Unexpected token '<'"）。HTTP 例外（404 等）維持原樣。
+    from werkzeug.exceptions import HTTPException
+    if isinstance(exc, HTTPException):
+        return exc
+    import traceback
+    traceback.print_exc()
+    return jsonify({"error": f"伺服器錯誤：{exc}"}), 500
+
+
 @app.get("/")
 def index():
     return app.send_static_file("index.html")

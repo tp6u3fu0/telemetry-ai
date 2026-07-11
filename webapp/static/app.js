@@ -440,6 +440,7 @@ function renderSlots() {
 }
 
 async function assignSlot(slot, id) {
+  const prevA = currentLapA, prevB = currentLapB;
   if (slot === "a") {
     if (currentLapB === id) currentLapB = null;   // 同一圈不能同時在兩欄
     currentLapA = id;
@@ -447,7 +448,23 @@ async function assignSlot(slot, id) {
     if (currentLapA === id) return;               // B 不能等於 A
     currentLapB = id;
   }
-  await compare();
+  const ok = await compare();
+  if (!ok && (prevA !== currentLapA || prevB !== currentLapB)) {
+    // 這組圈無法比較（常見：對手圈資料不完整）→ 還原，保留原本可用的畫面
+    const msg = lastCompareError || "這兩圈無法比較";
+    currentLapA = prevA; currentLapB = prevB;
+    if (prevA != null) await compare();
+    showCompareToast(msg);
+  }
+}
+
+let compareToastTimer = null;
+function showCompareToast(msg) {
+  const el = $("compare-toast");
+  el.textContent = msg;
+  el.hidden = false;
+  clearTimeout(compareToastTimer);
+  compareToastTimer = setTimeout(() => { el.hidden = true; }, 4000);
 }
 
 async function clearSlot(slot) {
@@ -729,6 +746,8 @@ function renderLapTrend(laps, bestId) {
   }).join("");
 }
 
+let lastCompareError = "";
+
 async function compare() {
   const a = currentLapA;
   const b = currentLapB;
@@ -743,12 +762,14 @@ async function compare() {
     if (isSingle) await singleView(a);
     else await compareView(a, b);
   } catch (err) {
+    lastCompareError = err.message;
     $("empty-state").style.display = "";
     $("empty-state").textContent = "載入失敗：" + err.message;
     $("dashboard").style.display = "none";
-    return;
+    return false;
   }
   await loadChat(a, isSingle ? 0 : b);
+  return true;
 }
 
 function setSingleUI(single) {

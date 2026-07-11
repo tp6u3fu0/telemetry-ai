@@ -18,6 +18,8 @@ from .db import TelemetryDB
 _MIN_POINTS = 40          # 少於這個點數的圈不存（雜訊/剛加入戰局）
 _MIN_LAP_MS = 20_000
 _MAX_LAP_MS = 15 * 60_000
+_MAX_SPLINE_GAP = 0.15    # 相鄰取樣 spline 跳超過此值 = 取樣中斷，該圈作廢
+_MIN_COVERAGE = 0.9       # 圈需涵蓋至少 90% 賽道長度
 
 
 @dataclass
@@ -102,6 +104,15 @@ class OpponentTracker:
         points = st["points"]
         if st["lap_start"] is None or len(points) < _MIN_POINTS:
             return
+        # 資料連續性/涵蓋率檢查：對手取樣常有中斷（車離太遠、進出 pit），
+        # spline 有大跳或沒跑完整圈的圈無法用於逐點比較，直接丟棄。
+        splines = [p[1] for p in points]
+        max_gap = max((splines[i + 1] - splines[i]
+                       for i in range(len(splines) - 1)), default=1.0)
+        if max_gap > _MAX_SPLINE_GAP:
+            return                                 # 中間缺一大段 → 取樣中斷
+        if splines[-1] - splines[0] < _MIN_COVERAGE:
+            return                                 # 沒涵蓋大部分賽道
         elapsed = int((now - st["lap_start"]) * 1000)
         reported = s.last_lap_ms or 0
         lap_time = reported if abs(reported - elapsed) < 5000 and reported else elapsed

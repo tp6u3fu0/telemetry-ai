@@ -151,6 +151,22 @@ def main() -> int:
                             f" 應約 {expect:.0f}")
         if len(pts) < 500 or len(pts) > 900:   # 80s × ~8-10Hz（限流生效即可）
             failures.append(f"取樣限流錯: {len(pts)} 點")
+
+    # -- 資料連續性守則：spline 中間大跳（取樣中斷）的圈應被丟棄 --
+    tr2 = OpponentTracker(db, sid, track_length_m=3200.0, hz=10)
+    now2 = 5000.0
+    for k in range(int(2.5 * lap_s / 0.05)):
+        t = k * 0.05
+        frac = (t / lap_s) % 1.0
+        # 人為在賽道 30%~75% 之間製造空洞（模擬車離太遠沒被抓到）
+        if 0.30 < frac < 0.75:
+            continue
+        tr2.process([OpponentSample(
+            car_key="y", name="Gappy", spline=frac, laps=int(t / lap_s),
+            last_lap_ms=80000 if int(t / lap_s) else 0,
+        )], now2 + t)
+    if db.conn.execute("SELECT COUNT(*) c FROM laps WHERE driver='Gappy'").fetchone()["c"]:
+        failures.append("spline 有大跳的對手圈不應入庫")
     db.close()
 
     if failures:

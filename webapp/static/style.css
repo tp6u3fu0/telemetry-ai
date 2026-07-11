@@ -511,6 +511,12 @@ select {
   font-size: 20px; padding: 4px 8px; border-radius: 6px; user-select: none;
 }
 .slot-swap:hover { color: var(--ink); background: var(--surface-2); }
+.compare-toast {
+  margin: -8px 0 12px; padding: 8px 12px; border-radius: 8px;
+  font-size: 12px; color: var(--loss);
+  background: rgba(230, 103, 103, 0.10); border: 1px solid var(--loss);
+}
+.compare-toast[hidden] { display: none; }
 
 /* ---- 區段表 ---- */
 table.zones { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }

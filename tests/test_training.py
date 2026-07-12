@@ -30,35 +30,45 @@ def main() -> int:
     if d.baseline_streak:
         failures.append("不完整圈應打斷基準連續")
 
-    # 5 圈乾淨 → 進超越期，A1 = 平均
+    # 5 圈乾淨 → 進「設定超越目標」，A1 = 平均
     out = feed(d, [(90000, True), (90000, True), (90000, True),
                    (90000, True), (90200, True)])
-    if out[-1] != "streak_done" or d.stage != Stage.BEAT:
-        failures.append(f"基準 5 圈應進超越期: {d.stage}")
+    if out[-1] != "streak_done" or d.stage != Stage.SET_BEAT:
+        failures.append(f"基準 5 圈應進設定超越目標: {d.stage}")
     if d.baseline_avg != 90040:
         failures.append(f"A1 計算錯: {d.baseline_avg}")
 
-    # -- 超越期：慢過 A1 或失誤都重數 --
-    d.push_lap(89000, True)                   # 快 → 累積 1
-    d.push_lap(89500, True)                   # 快 → 累積 2
+    # -- 設定超越目標（round 2 自訂進步時間） --
+    if d.suggested_beat_target() != 89740:        # A1 快 0.3 秒
+        failures.append(f"建議超越目標錯: {d.suggested_beat_target()}")
+    if d.push_lap(89000, True) != "waiting":
+        failures.append("設定超越目標前的圈應為 waiting")
+    if not d.set_beat_target(89740):
+        failures.append("set_beat_target 應成功")
+    if d.stage != Stage.BEAT:
+        failures.append("設定超越目標後應進超越期")
+
+    # -- 超越期：超過超越目標 或 失誤都重數 --
+    d.push_lap(89000, True)                   # ≤ 目標 → 累積 1
+    d.push_lap(89500, True)                   # ≤ 目標 → 累積 2
     if len(d.beat_streak) != 2:
         failures.append(f"超越連續錯: {len(d.beat_streak)}")
-    d.push_lap(90500, True)                   # 慢過 A1 → 歸零
+    d.push_lap(90500, True)                   # 超過超越目標 → 歸零
     if d.beat_streak:
-        failures.append("慢過 A1 應打斷超越連續")
+        failures.append("超過超越目標應打斷超越連續")
     d.push_lap(89000, True)
     d.push_lap(89000, False)                  # 有效速度但無效圈 → 歸零
     if d.beat_streak:
         failures.append("無效圈應打斷超越連續（即使很快）")
-    # 5 圈都快且乾淨 → 進設定目標，A2
+    # 5 圈都 ≤ 目標且乾淨 → 進設定達標目標，A2
     out = feed(d, [(89000, True), (89000, True), (89000, True),
                    (89000, True), (89000, True)])
     if out[-1] != "streak_done" or d.stage != Stage.SET_TARGET:
-        failures.append(f"超越 5 圈應進設定目標: {d.stage}")
+        failures.append(f"超越 5 圈應進設定達標目標: {d.stage}")
     if d.beat_avg != 89000:
         failures.append(f"A2 計算錯: {d.beat_avg}")
 
-    # -- 設定目標 --
+    # -- 設定達標目標 --
     if d.suggested_target() != 88500:
         failures.append(f"建議目標錯: {d.suggested_target()}")
     if d.push_lap(88000, True) != "waiting":
@@ -109,9 +119,9 @@ def main() -> int:
             or restored.baseline_streak != mid.baseline_streak
             or len(restored.history) != 3):
         failures.append(f"續傳還原錯: {restored.to_dict()}")
-    # 續傳後接著跑 2 圈應完成基準期（連續不因暫停中斷）
+    # 續傳後接著跑 2 圈應完成基準期（連續不因暫停中斷）→ 進設定超越目標
     feed(restored, [(90000, True), (90000, True)])
-    if restored.stage != Stage.BEAT:
+    if restored.stage != Stage.SET_BEAT:
         failures.append("續傳後應能接續完成連續")
     # 完成態 round-trip 保留分數
     if Five55.from_dict(d.to_dict()).score != d.score:

@@ -48,7 +48,8 @@ class RecordingService:
         with self._train_lock:
             if self._training is None:
                 return False, "沒有進行中的訓練"
-            if self._training.set_target(target_ms):
+            # 依目前階段自動判斷是「超越目標」或「達標目標」
+            if self._training.apply_target(target_ms):
                 self.status["training"] = self._training.state()
                 return True, "目標已設定"
             return False, "現在不是設定目標的階段"

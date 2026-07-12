@@ -1430,14 +1430,18 @@ function renderFocus(st) {
   }
   $("focus-progress").innerHTML = prog === null ? "" : dots5(prog);
 
-  // 設定目標輸入（用 data-shown 避免每秒重建把輸入清掉）
+  // 設定目標輸入——超越目標(set_beat) 與達標目標(set_target) 共用同一組件，
+  // 只差建議值與按鈕文字。data-shown 記住目前是哪個階段，切換才重建。
   const tgt = $("focus-target");
-  if (t && t.stage === "set_target") {
-    if (!tgt.dataset.shown) {
+  const isSet = t && (t.stage === "set_beat" || t.stage === "set_target");
+  if (isSet) {
+    if (tgt.dataset.shown !== t.stage) {
+      const sug = t.stage === "set_beat" ? t.suggested_beat_target : t.suggested_target;
+      const label = t.stage === "set_beat" ? "設定超越目標" : "設定達標目標";
       tgt.innerHTML =
-        `<input id="focus-target-input" value="${(t.suggested_target / 1000).toFixed(3)}">` +
-        `<button id="focus-target-set" class="mini-btn">設定目標</button>`;
-      tgt.dataset.shown = "1";
+        `<input id="focus-target-input" value="${((sug || 0) / 1000).toFixed(3)}">` +
+        `<button id="focus-target-set" class="mini-btn">${label}</button>`;
+      tgt.dataset.shown = t.stage;
       $("focus-target-set").onclick = async () => {
         const ms = parseTimeToMs($("focus-target-input").value);
         if (ms) {

@@ -3,11 +3,12 @@
 訓練法概念源自賽車一丁的影片《不養成好習慣, 就是在培養一個壞習慣》
 （https://youtu.be/_JJEQIiwphw）。
 
-四階段：
-  1. 基準期  連續 5 圈 0 失誤 → 平均 A1（失誤=無效/不完整圈，會打斷連續歸零重數）
-  2. 超越期  連續 5 圈每圈都乾淨且快過 A1 → 平均 A2（慢過 A1 或失誤都歸零重數）
-  3. 設定目標 玩家依 A2 自訂目標時間 T
-  4. 達標期  在剩餘圈中累積 5 圈 ≤ T（不需連續；無效圈不算數也不影響）→ 完成計分
+階段：
+  1. 基準期    連續 5 圈 0 失誤 → 平均 A1（失誤=無效/不完整圈，會打斷連續歸零重數）
+  2. 設定超越目標 玩家依 A1 自訂超越目標時間 B（預設 A1 快 0.3 秒）
+  3. 超越期    連續 5 圈每圈都乾淨且 ≤ B → 平均 A2（超過 B 或失誤都歸零重數）
+  4. 設定目標  玩家依 A2 自訂達標目標時間 T（預設 A2 快 0.5 秒）
+  5. 達標期    在剩餘圈中累積 5 圈 ≤ T（不需連續；無效圈不算數也不影響）→ 完成計分
 
 失誤定義：無效圈（出界/切彎）或不完整圈。這類圈一律不計圈速——
 連續階段會打斷連續，達標階段單純略過。
@@ -26,8 +27,9 @@ ACHIEVE_TARGET = 5
 
 class Stage(str, Enum):
     BASELINE = "baseline"       # 基準期
+    SET_BEAT = "set_beat"       # 等待設定超越目標
     BEAT = "beat"               # 超越期
-    SET_TARGET = "set_target"   # 等待設定目標
+    SET_TARGET = "set_target"   # 等待設定達標目標
     ACHIEVE = "achieve"         # 達標期
     DONE = "done"               # 完成
 
@@ -51,6 +53,7 @@ class Five55:
     stage: Stage = Stage.BASELINE
     baseline_streak: list = field(default_factory=list)
     baseline_avg: int | None = None
+    beat_target_ms: int | None = None   # round 2 自訂超越目標
     beat_streak: list = field(default_factory=list)
     beat_avg: int | None = None
     target_ms: int | None = None
@@ -77,12 +80,15 @@ class Five55:
             self.baseline_streak.append(time_ms)
             if len(self.baseline_streak) >= STREAK_LEN:
                 self.baseline_avg = round(sum(self.baseline_streak) / STREAK_LEN)
-                self.stage = Stage.BEAT
+                self.stage = Stage.SET_BEAT
                 return "streak_done"
             return "streak"
 
+        if self.stage == Stage.SET_BEAT:
+            return "waiting"      # 超越目標未定，圈暫不評估（照常存進 DB）
+
         if self.stage == Stage.BEAT:
-            if not good or time_ms >= self.baseline_avg:
+            if not good or time_ms > self.beat_target_ms:
                 self.beat_streak = []
                 return "reset"
             self.beat_streak.append(time_ms)
@@ -110,12 +116,31 @@ class Five55:
 
         return "done"
 
+    def apply_target(self, ms) -> bool:
+        """依目前階段設定對應的目標（超越目標 or 達標目標），並推進。"""
+        if self.stage == Stage.SET_BEAT:
+            return self.set_beat_target(ms)
+        if self.stage == Stage.SET_TARGET:
+            return self.set_target(ms)
+        return False
+
+    def set_beat_target(self, target_ms) -> bool:
+        if self.stage != Stage.SET_BEAT:
+            return False
+        self.beat_target_ms = int(target_ms)
+        self.stage = Stage.BEAT
+        return True
+
     def set_target(self, target_ms) -> bool:
         if self.stage != Stage.SET_TARGET:
             return False
         self.target_ms = int(target_ms)
         self.stage = Stage.ACHIEVE
         return True
+
+    def suggested_beat_target(self) -> int | None:
+        """預設建議：A1 快 0.3 秒。"""
+        return None if self.baseline_avg is None else max(1, self.baseline_avg - 300)
 
     def suggested_target(self) -> int | None:
         """預設建議：A2 快 0.5 秒。"""
@@ -147,18 +172,21 @@ class Five55:
     # -- 序列化（給 API / UI） ----------------------------------------------
 
     _STAGE_LABEL = {
-        Stage.BASELINE: "基準期", Stage.BEAT: "超越期",
-        Stage.SET_TARGET: "設定目標", Stage.ACHIEVE: "達標期", Stage.DONE: "完成",
+        Stage.BASELINE: "基準期", Stage.SET_BEAT: "設定超越目標",
+        Stage.BEAT: "超越期", Stage.SET_TARGET: "設定達標目標",
+        Stage.ACHIEVE: "達標期", Stage.DONE: "完成",
     }
 
     def requirement(self) -> str:
         if self.stage == Stage.BASELINE:
             return f"連續 5 圈零失誤（目前 {len(self.baseline_streak)}/5）"
+        if self.stage == Stage.SET_BEAT:
+            return f"設定你的超越目標圈速（基準均速 {_fmt(self.baseline_avg)}）"
         if self.stage == Stage.BEAT:
-            return (f"連續 5 圈快過基準 {_fmt(self.baseline_avg)}"
+            return (f"連續 5 圈 ≤ 超越目標 {_fmt(self.beat_target_ms)}"
                     f"（目前 {len(self.beat_streak)}/5）")
         if self.stage == Stage.SET_TARGET:
-            return f"設定你的目標圈速（超越期均速 {_fmt(self.beat_avg)}）"
+            return f"設定你的達標目標圈速（超越期均速 {_fmt(self.beat_avg)}）"
         if self.stage == Stage.ACHIEVE:
             return (f"累積 5 圈 ≤ {_fmt(self.target_ms)}"
                     f"（目前 {len(self.achieve_qualified)}/5）")
@@ -171,6 +199,8 @@ class Five55:
             "requirement": self.requirement(),
             "baseline_progress": len(self.baseline_streak),
             "baseline_avg": self.baseline_avg,
+            "beat_target_ms": self.beat_target_ms,
+            "suggested_beat_target": self.suggested_beat_target(),
             "beat_progress": len(self.beat_streak),
             "beat_avg": self.beat_avg,
             "target_ms": self.target_ms,
@@ -193,6 +223,7 @@ class Five55:
             "stage": self.stage.value,
             "baseline_streak": list(self.baseline_streak),
             "baseline_avg": self.baseline_avg,
+            "beat_target_ms": self.beat_target_ms,
             "beat_streak": list(self.beat_streak),
             "beat_avg": self.beat_avg,
             "target_ms": self.target_ms,
@@ -212,6 +243,7 @@ class Five55:
             stage=Stage(d.get("stage", Stage.BASELINE.value)),
             baseline_streak=list(d.get("baseline_streak", [])),
             baseline_avg=d.get("baseline_avg"),
+            beat_target_ms=d.get("beat_target_ms"),
             beat_streak=list(d.get("beat_streak", [])),
             beat_avg=d.get("beat_avg"),
             target_ms=d.get("target_ms"),

@@ -1,9 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller 打包設定：ACC Telemetry 桌面版（Windows, onefile）。
+"""PyInstaller 打包設定：Telemetry AI 桌面版（Windows, onefile）。
 
 建置：
-    uv run --with pyinstaller pyinstaller acc-telemetry.spec
-產出：dist/ACC-Telemetry.exe（單一檔，可直接雙擊）
+    uv run --with pyinstaller pyinstaller telemetry-ai.spec
+產出：dist/Telemetry-AI.exe（單一檔，可直接雙擊）
 
 要點：
   * 入口 webapp/desktop.py（Flask 背景 thread + pywebview WebView2 視窗）
@@ -43,7 +43,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="ACC-Telemetry",
+    name="Telemetry-AI",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

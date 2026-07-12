@@ -208,7 +208,7 @@ delta_ms(s) = B 到達位置 s 的時間 − A 的時間，煞車區段以「任
 
 ```powershell
 uv run python -m webapp.desktop      # 桌面版（原生視窗，建議）
-# 或直接雙擊專案根目錄的 ACC-Telemetry.bat
+# 或直接雙擊專案根目錄的 Telemetry-AI.bat
 uv run python -m webapp.app          # 瀏覽器版 http://127.0.0.1:5000（開發用）
 ```
 
@@ -296,7 +296,7 @@ webapp/                      # 儀表板 App
   app.py                     # Flask server + JSON API（compare/record/session 管理）
   recording.py               # App 內錄製服務（背景 thread 狀態機）
   static/                    # 前端（index.html / app.js / style.css / vendor uPlot）
-ACC-Telemetry.bat            # 雙擊啟動桌面版
+Telemetry-AI.bat            # 雙擊啟動桌面版
 tools/
   fake_broadcast_server.py   # 模擬 ACC broadcasting server，離線測試用
 tests/
@@ -305,7 +305,7 @@ tests/
   test_analysis.py           # 階段三：合成兩圈驗證 delta 與煞車區段偵測
   test_webapp.py             # 前端 smoke test（DOM 契約 + compare 對齊不變式）
 run_app.py                   # PyInstaller 打包進入點（絕對 import）
-acc-telemetry.spec           # PyInstaller 打包設定（onefile, Windows）
+telemetry-ai.spec           # PyInstaller 打包設定（onefile, Windows）
 ```
 
 ## 打包成 exe（Windows）
@@ -313,13 +313,13 @@ acc-telemetry.spec           # PyInstaller 打包設定（onefile, Windows）
 單一執行檔，使用者不需安裝 Python：
 
 ```powershell
-uv run --with pyinstaller pyinstaller acc-telemetry.spec --noconfirm
-# 產出 dist/ACC-Telemetry.exe（~37MB），直接雙擊即可
+uv run --with pyinstaller pyinstaller telemetry-ai.spec --noconfirm
+# 產出 dist/Telemetry-AI.exe（~37MB），直接雙擊即可
 ```
 
 - 入口是 `run_app.py`（絕對 import 包住 `webapp.desktop`）——PyInstaller 把入口當
   `__main__` 執行，若直接指向套件內用相對 import 的檔會崩潰。
-- 打包後 **config.json 與遙測 DB 存於 `%LOCALAPPDATA%\ACC-Telemetry\`**（可寫、
+- 打包後 **config.json 與遙測 DB 存於 `%LOCALAPPDATA%\Telemetry-AI\`**（可寫、
   跨重啟保留）；開發模式維持專案根目錄不變。見 `webapp/paths.py`。
 - 需要 Windows 內建的 **WebView2 Runtime**（Win11 預裝；Win10 可能要另裝）。
 - 排除 matplotlib（僅測試/繪圖用）以縮小體積。
@@ -327,7 +327,7 @@ uv run --with pyinstaller pyinstaller acc-telemetry.spec --noconfirm
 ### 發佈到 GitHub
 
 `.github/workflows/build.yml` 會在**推 tag（`v*`）**時於 windows runner 自動建置，
-並把 `ACC-Telemetry.exe` 附到對應的 Release：
+並把 `Telemetry-AI.exe` 附到對應的 Release：
 
 ```powershell
 git tag v1.0.0 && git push origin v1.0.0

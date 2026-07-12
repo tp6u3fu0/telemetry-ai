@@ -22,22 +22,22 @@ jobs:
         run: uv sync --frozen
 
       - name: Build exe
-        run: uv run --frozen --with pyinstaller pyinstaller acc-telemetry.spec --noconfirm
+        run: uv run --frozen --with pyinstaller pyinstaller telemetry-ai.spec --noconfirm
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ACC-Telemetry-exe
-          path: dist/ACC-Telemetry.exe
+          name: Telemetry-AI-exe
+          path: dist/Telemetry-AI.exe
 
       - name: Attach to Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/ACC-Telemetry.exe
+          files: dist/Telemetry-AI.exe
           body: |
-            ACC Telemetry 桌面版（Windows）。
+            Telemetry AI 桌面版（Windows）。
 
-            **下載** `ACC-Telemetry.exe` 直接雙擊即可，無需安裝 Python。
+            **下載** `Telemetry-AI.exe` 直接雙擊即可，無需安裝 Python。
             需要 Windows 10/11 內建的 WebView2 Runtime（Win11 預裝）。
-            設定與遙測資料存於 `%LOCALAPPDATA%\ACC-Telemetry\`。
+            設定與遙測資料存於 `%LOCALAPPDATA%\Telemetry-AI\`。

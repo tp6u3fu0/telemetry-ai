@@ -4,7 +4,7 @@
     uv run python -m webapp.desktop
     uv run python -m webapp.desktop --db data/telemetry.sqlite3
 
-或直接雙擊專案根目錄的 ACC-Telemetry.bat。
+或直接雙擊專案根目錄的 Telemetry-AI.bat。
 """
 from __future__ import annotations
 
@@ -19,9 +19,9 @@ from .paths import user_data_dir
 
 
 def main() -> None:
-    # 預設 DB：開發時 = 專案根 data/；打包後 = %LOCALAPPDATA%\ACC-Telemetry\data\
+    # 預設 DB：開發時 = 專案根 data/；打包後 = %LOCALAPPDATA%\Telemetry-AI\data\
     default_db = str(user_data_dir() / "data" / "telemetry.sqlite3")
-    parser = argparse.ArgumentParser(description="ACC Telemetry 桌面版")
+    parser = argparse.ArgumentParser(description="Telemetry AI 桌面版")
     parser.add_argument("--db", default=default_db)
     args = parser.parse_args()
     app.config["DB_PATH"] = args.db
@@ -32,7 +32,7 @@ def main() -> None:
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
     webview.create_window(
-        "ACC Telemetry",
+        "Telemetry AI",
         f"http://127.0.0.1:{port}/",
         width=1360, height=900,
         background_color="#0d0d0d",

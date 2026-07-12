@@ -16,7 +16,7 @@ from .protocol import InboundMessage
 
 class BroadcastClient:
     def __init__(self, host: str = "127.0.0.1", port: int = 9000,
-                 display_name: str = "ACC Telemetry Agent",
+                 display_name: str = "Telemetry AI Agent",
                  connection_password: str = "asd",
                  command_password: str = "",
                  update_interval_ms: int = 100):

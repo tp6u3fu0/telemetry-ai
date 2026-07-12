@@ -28,11 +28,11 @@ def resource_dir() -> Path:
 
 
 def user_data_dir() -> Path:
-    """可寫使用者資料夾。打包後為 %LOCALAPPDATA%\\ACC-Telemetry，
+    """可寫使用者資料夾。打包後為 %LOCALAPPDATA%\\Telemetry-AI，
     開發時維持專案根目錄（既有 config.json / data/ 原地沿用）。"""
     if not is_frozen():
         return _PROJECT_ROOT
     base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
-    root = Path(base) / "ACC-Telemetry" if base else Path.home() / ".acc-telemetry"
+    root = Path(base) / "Telemetry-AI" if base else Path.home() / ".telemetry-ai"
     root.mkdir(parents=True, exist_ok=True)
     return root

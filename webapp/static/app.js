@@ -1,4 +1,4 @@
-/* ACC Telemetry Dashboard 前端：session/圈選擇 + 三張同步 uPlot 圖 + 區段表 */
+/* Telemetry AI Dashboard 前端：session/圈選擇 + 三張同步 uPlot 圖 + 區段表 */
 "use strict";
 
 // 圖表顏色一律讀自 CSS 變數，才能跟著亮／暗主題自動切換

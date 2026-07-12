@@ -1,6 +1,6 @@
 """App 設定：存於使用者資料夾 config.json（勿提交金鑰）。
 
-開發時為專案根目錄；打包後為 %LOCALAPPDATA%\\ACC-Telemetry（見 paths.py）——
+開發時為專案根目錄；打包後為 %LOCALAPPDATA%\\Telemetry-AI（見 paths.py）——
 否則金鑰會寫進唯讀的 _MEIPASS 暫存區、每次啟動遺失。
 """
 from __future__ import annotations

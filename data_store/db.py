@@ -57,6 +57,16 @@ CREATE TABLE IF NOT EXISTS trainings (
     score       INTEGER,                     -- 總分（NULL = 未完成）
     result      TEXT NOT NULL                -- JSON: 完整 state()
 );
+
+-- 暫停中的訓練（單一插槽 id=1）：存完整狀態以便下次續傳
+CREATE TABLE IF NOT EXISTS training_progress (
+    id         INTEGER PRIMARY KEY CHECK (id = 1),
+    kind       TEXT NOT NULL DEFAULT '555',
+    game       TEXT,
+    track      TEXT,
+    updated_at TEXT NOT NULL,
+    state      TEXT NOT NULL                 -- JSON: Five55.to_dict()
+);
 """
 
 # telemetry_points 的完整欄位順序（save_lap 的 points tuple 依此排列，
@@ -219,6 +229,32 @@ class TelemetryDB:
             d["result"] = json.loads(d["result"])
             out.append(d)
         return out
+
+    # -- 暫停中的訓練（續傳） ------------------------------------------------
+
+    def save_training_progress(self, kind: str, game, track,
+                               state: dict) -> None:
+        self.conn.execute(
+            "INSERT INTO training_progress (id, kind, game, track, updated_at, "
+            "state) VALUES (1, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET "
+            "kind = excluded.kind, game = excluded.game, track = excluded.track, "
+            "updated_at = excluded.updated_at, state = excluded.state",
+            (kind, game, track, datetime.now().isoformat(timespec="seconds"),
+             json.dumps(state, ensure_ascii=False)))
+        self.conn.commit()
+
+    def get_training_progress(self) -> dict | None:
+        row = self.conn.execute(
+            "SELECT * FROM training_progress WHERE id = 1").fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        d["state"] = json.loads(d["state"])
+        return d
+
+    def clear_training_progress(self) -> None:
+        self.conn.execute("DELETE FROM training_progress WHERE id = 1")
+        self.conn.commit()
 
     # -- 個人最佳 -----------------------------------------------------------
 

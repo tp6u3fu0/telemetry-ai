@@ -4,3 +4,9 @@ __pycache__/
 config.json
 data/*
 !data/tracks/
+
+# PyInstaller 打包產物
+build/
+dist/
+*.manifest
+acc_tel_debug.txt

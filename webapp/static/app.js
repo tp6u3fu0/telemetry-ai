@@ -1,12 +1,19 @@
 /* ACC Telemetry Dashboard 前端：session/圈選擇 + 三張同步 uPlot 圖 + 區段表 */
 "use strict";
 
-const COLORS = {
-  a: "#3987e5", b: "#199e70",
-  ink: "#ffffff", ink2: "#c3c2b7", muted: "#898781",
-  grid: "#2c2c2a", baseline: "#383835",
-  loss: "#e66767", gain: "#0ca30c",
-};
+// 圖表顏色一律讀自 CSS 變數，才能跟著亮／暗主題自動切換
+function readColors() {
+  const cs = getComputedStyle(document.documentElement);
+  const v = (n, fallback) => (cs.getPropertyValue(n).trim() || fallback);
+  return {
+    a: v("--series-a", "#3987e5"), b: v("--series-b", "#199e70"),
+    ink: v("--ink", "#ffffff"), ink2: v("--ink-2", "#c3c2b7"),
+    muted: v("--muted", "#898781"), grid: v("--grid", "#2c2c2a"),
+    baseline: v("--baseline", "#383835"),
+    loss: v("--loss", "#e66767"), gain: v("--gain", "#0ca30c"),
+  };
+}
+let COLORS = readColors();
 const SYNC_KEY = "acc-telemetry";
 
 const $ = (id) => document.getElementById(id);
@@ -22,6 +29,8 @@ let coachCtx = { a: 0, b: 0 };  // 對話所屬的圈（b=0 表單圈）
 
 function zoomTo(startPct, endPct) {
   if (!charts.length) return;
+  // 微分段／區段列在別的分頁，縮放的是通道圖——自動切過去才看得到
+  switchDashTab("channels");
   const padding = (endPct - startPct) * 0.3; // 前後多留 30% 脈絡
   charts[0].setScale("x", { min: Math.max(0, startPct - padding),
                             max: Math.min(100, endPct + padding) });
@@ -83,6 +92,7 @@ function sessionLabel(s) {
 
 let currentView = "home";
 let allSessions = [];
+let pausedTraining = null;   // /api/train/progress：暫停中的訓練（可續傳）
 
 async function init() {
   currentView = "home";
@@ -92,11 +102,13 @@ async function init() {
 }
 
 async function renderHome() {
-  const [sessions, pbs, trainings] = await Promise.all([
+  const [sessions, pbs, trainings, prog] = await Promise.all([
     fetchJSON("/api/sessions"),
     fetchJSON("/api/personal-bests").catch(() => []),
     fetchJSON("/api/trainings").catch(() => []),
+    fetchJSON("/api/train/progress").catch(() => ({ exists: false })),
   ]);
+  pausedTraining = prog && prog.exists ? prog : null;
   allSessions = sessions;
   const withLaps = sessions.filter((s) => s.lap_count > 0);
 
@@ -576,6 +588,7 @@ function makeChart(elId, height, series, data, extra = {}) {
     ...extra,
   };
   const chart = new uPlot(opts, data, el);
+  chart._baseHeight = height;      // 放大後還原用
   charts.push(chart);
   return chart;
 }
@@ -1002,15 +1015,110 @@ function renderZones(zones, worst) {
 
 let resizeTimer = null;
 window.addEventListener("resize", () => {
-  for (const c of charts) {
-    const el = c.root.parentElement;
-    c.setSize({ width: el.clientWidth, height: c.height });
-  }
+  resizeAllCharts();
   // 地圖是點陣 canvas，尺寸變了必須重繪，否則被瀏覽器拉伸變形
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => {
     if (lastMapArgs) renderMap(lastMapArgs.d, lastMapArgs.single);
   }, 150);
+});
+
+// 依每張圖所在卡片是否放大，設回對應高度（放大 → 大高度；否則 → 原始高度）。
+// 統一走這裡，避免用 c.height（放大後會殘留）。
+function resizeAllCharts() {
+  for (const c of charts) {
+    const el = c.root.parentElement;
+    const maxed = c.root.closest(".chart-card.card-max");
+    // 讀 clientWidth 會強制同步 reflow，故此時已反映放大後的寬度
+    c.setSize({ width: el.clientWidth,
+                height: maxed ? maxCardHeight() : (c._baseHeight || 260) });
+  }
+}
+
+// 系統亮／暗主題切換：重讀顏色並重建目前圖表
+if (window.matchMedia) {
+  window.matchMedia("(prefers-color-scheme: light)").addEventListener("change", () => {
+    COLORS = readColors();
+    if (lastData) (isSingle ? buildSingleCharts : buildCharts)(lastData);
+  });
+}
+
+/* ---------- 單張圖放大檢視 ---------- */
+
+// 放大時可用的圖高：視窗高扣掉卡片邊距與標題
+function maxCardHeight() { return Math.max(280, window.innerHeight * 0.94 - 90); }
+
+let maxedCard = null;
+let cardBackdrop = null;
+
+function applyCardResize(card) {
+  // 同步執行——不依賴 rAF（某些環境 rAF 會被節流／不觸發）
+  resizeAllCharts();
+  if (card.querySelector("#track-map") && lastMapArgs) {
+    renderMap(lastMapArgs.d, lastMapArgs.single);
+  }
+}
+
+function closeMaxedCard() {
+  if (!maxedCard) return;
+  const card = maxedCard;
+  maxedCard = null;
+  card.classList.remove("card-max");
+  if (cardBackdrop) { cardBackdrop.remove(); cardBackdrop = null; }
+  applyCardResize(card);
+}
+
+function openMaxedCard(card) {
+  if (maxedCard === card) { closeMaxedCard(); return; }
+  closeMaxedCard();                        // 一次只放大一張
+  cardBackdrop = document.createElement("div");
+  cardBackdrop.className = "card-backdrop";
+  cardBackdrop.onclick = closeMaxedCard;
+  document.body.appendChild(cardBackdrop);
+  card.classList.add("card-max");
+  maxedCard = card;
+  applyCardResize(card);
+}
+
+/* ---------- 儀表板分頁 ---------- */
+
+function setupDashTabs() {
+  const nav = document.getElementById("dash-tabs");
+  if (!nav) return;
+  nav.addEventListener("click", (e) => {
+    const btn = e.target.closest(".dash-tab");
+    if (!btn) return;
+    switchDashTab(btn.dataset.panel);
+  });
+}
+
+function switchDashTab(name) {
+  for (const b of document.querySelectorAll(".dash-tab"))
+    b.classList.toggle("active", b.dataset.panel === name);
+  for (const p of document.querySelectorAll(".tab-panel"))
+    p.classList.toggle("active", p.dataset.panel === name);
+  // 通道圖的 uPlot 是在面板隱藏（寬度 0）時建立的，切過來要重算尺寸
+  if (name === "channels") resizeAllCharts();
+}
+
+// 為每張圖表卡片加上放大鈕（只加一次）
+function setupCardMaximize() {
+  const main = document.querySelector("#dashboard");
+  if (!main) return;
+  for (const card of main.querySelectorAll(".chart-card")) {
+    const h2 = card.querySelector("h2");
+    if (!h2 || h2.querySelector(".card-max-btn")) continue;
+    const btn = document.createElement("button");
+    btn.className = "card-max-btn";
+    btn.title = "放大檢視";
+    btn.textContent = "⤢";
+    btn.onclick = () => openMaxedCard(card);
+    h2.appendChild(btn);
+  }
+}
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeMaxedCard();
 });
 
 /* ---------- AI 教練 ---------- */
@@ -1169,13 +1277,34 @@ function renderTrainPanel(st) {
 
   if (!active || st.mode !== "train" || !t) {
     // 非訓練狀態：顯示提示 + 「開始」；若剛完成則保留分數在訓練紀錄區
-    startBtn.textContent = "開始";
     startBtn.disabled = active && st.mode !== "train";  // 一般錄製中不能開訓練
+    if (active && st.mode !== "train") {
+      startBtn.textContent = "開始";
+      panel.innerHTML = '<div class="train-hint">錄製進行中，停止後才能開始訓練。</div>';
+      return;
+    }
+    if (pausedTraining && pausedTraining.state) {
+      // 有暫停中的訓練 → 主鍵改「繼續」，另附「放棄重來」
+      const ps = pausedTraining.state;
+      const when = (pausedTraining.updated_at || "").replace("T", " ");
+      startBtn.textContent = "繼續訓練";
+      panel.innerHTML =
+        `<div class="train-resume">
+           <div class="tr-badge">暫停中</div>
+           <div class="tr-info"><b>${ps.stage_label}</b> · ${ps.requirement}</div>
+           <div class="train-hint">${pausedTraining.track || "?"} · 上次 ${when}</div>
+           <button id="train-discard" class="mini-btn danger">放棄，重新開始</button>
+         </div>`;
+      $("train-discard").onclick = async () => {
+        await fetchJSON("/api/train/discard", { method: "POST" }).catch(() => {});
+        pausedTraining = null;
+        renderTrainPanel(st);
+      };
+      return;
+    }
+    startBtn.textContent = "開始";
     panel.innerHTML =
       '<div class="train-hint">連續 5 圈零失誤 → 5 圈超越均速 → 設目標 → 達標 5 圈</div>';
-    if (active && st.mode !== "train") {
-      panel.innerHTML = '<div class="train-hint">錄製進行中，停止後才能開始訓練。</div>';
-    }
     return;
   }
 
@@ -1382,9 +1511,10 @@ function setupTraining() {
     if (active && st.mode === "train") {
       await stopTraining();
     } else if (!active) {
+      const resume = !!pausedTraining;   // 有暫停進度 → 續傳
       await fetchJSON("/api/record/start", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: "train" }),
+        body: JSON.stringify({ mode: "train", resume }),
       });
       lastLapsSaved = 0;
       showFocus();          // 立刻切到專注畫面
@@ -1452,6 +1582,8 @@ setupTraining();
 setupSpeedMode();
 setupCoach();
 setupSettings();
+setupCardMaximize();
+setupDashTabs();
 init().catch((err) => {
   $("session-cards").innerHTML =
     '<div class="pb-empty">初始化失敗：' + err.message + "</div>";

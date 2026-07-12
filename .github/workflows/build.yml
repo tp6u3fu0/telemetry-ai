@@ -1,0 +1,43 @@
+name: Build Windows exe
+
+# 打 tag（v1.0.0…）→ 自動建置並發佈 Release；也可在 Actions 頁手動觸發。
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write        # 建立 Release 需要
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Sync dependencies (locked)
+        run: uv sync --frozen
+
+      - name: Build exe
+        run: uv run --frozen --with pyinstaller pyinstaller acc-telemetry.spec --noconfirm
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ACC-Telemetry-exe
+          path: dist/ACC-Telemetry.exe
+
+      - name: Attach to Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/ACC-Telemetry.exe
+          body: |
+            ACC Telemetry 桌面版（Windows）。
+
+            **下載** `ACC-Telemetry.exe` 直接雙擊即可，無需安裝 Python。
+            需要 Windows 10/11 內建的 WebView2 Runtime（Win11 預裝）。
+            設定與遙測資料存於 `%LOCALAPPDATA%\ACC-Telemetry\`。

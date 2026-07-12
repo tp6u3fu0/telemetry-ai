@@ -101,6 +101,22 @@ def main() -> int:
     if st["stage"] != "done" or st["score"]["total"] != sc["total"]:
         failures.append("state() 不一致")
 
+    # -- to_dict / from_dict：暫停續傳的完整還原 --
+    mid = Five55()
+    feed(mid, [(90000, True), (90100, True), (90050, True)])  # 基準期跑到 3/5
+    restored = Five55.from_dict(mid.to_dict())
+    if (restored.stage != Stage.BASELINE
+            or restored.baseline_streak != mid.baseline_streak
+            or len(restored.history) != 3):
+        failures.append(f"續傳還原錯: {restored.to_dict()}")
+    # 續傳後接著跑 2 圈應完成基準期（連續不因暫停中斷）
+    feed(restored, [(90000, True), (90000, True)])
+    if restored.stage != Stage.BEAT:
+        failures.append("續傳後應能接續完成連續")
+    # 完成態 round-trip 保留分數
+    if Five55.from_dict(d.to_dict()).score != d.score:
+        failures.append("完成態續傳分數遺失")
+
     # -- 完美一致性 → 高一致性分 --
     d2 = Five55()
     feed(d2, [(90000, True)] * 5)             # 全同 → spread 0

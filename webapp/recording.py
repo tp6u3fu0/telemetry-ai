@@ -30,11 +30,14 @@ class RecordingService:
     def active(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
 
-    def start(self, db_path: str, mode: str = "record") -> tuple[bool, str]:
+    def start(self, db_path: str, mode: str = "record",
+              resume: bool = False) -> tuple[bool, str]:
         if self.active:
             return False, "已在錄製中"
         self._stop.clear()
-        self._training = Five55() if mode == "train" else None
+        self._mode = mode
+        self._resume = resume and mode == "train"
+        self._training = None            # 於 _run 內建立（續傳需先開 DB）
         self.status = {"phase": "waiting", "mode": mode}
         self._thread = threading.Thread(target=self._run, args=(db_path,),
                                         daemon=True)
@@ -88,6 +91,13 @@ class RecordingService:
                 game=reader.game)
             recorder = LapRecorder(db, session_id)
             self._train_saved = False
+            # 訓練：續傳既有進度，或開新的一輪
+            if self._mode == "train":
+                with self._train_lock:
+                    prog = db.get_training_progress() if self._resume else None
+                    self._training = (Five55.from_dict(prog["state"])
+                                      if prog else Five55())
+                    self.status["training"] = self._training.state()
             # 對手遙測（reader 有支援才啟用；F1 25 / iRacing）
             tracker = None
             if hasattr(reader, "read_opponents"):
@@ -108,7 +118,13 @@ class RecordingService:
                             db.save_training(session_id, "555",
                                              self._training.score["total"],
                                              self._training.state())
+                            db.clear_training_progress()   # 完成→清掉暫停插槽
                             self._train_saved = True
+                        elif self._training.stage != Stage.DONE:
+                            # 每圈存檔：即使中途當機也不丟進度
+                            db.save_training_progress(
+                                "555", reader.game, static.track,
+                                self._training.to_dict())
 
             recorder.on_lap_saved = on_lap
             period = 1.0 / _HZ

@@ -201,6 +201,19 @@ body {
 
 /* ===== 555 訓練面板 ===== */
 .train-hint { font-size: 11px; color: var(--muted); line-height: 1.6; }
+.train-resume {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 8px; border-radius: 8px;
+  background: rgba(57, 135, 229, 0.10);
+  border: 1px solid var(--series-a);
+}
+.train-resume .tr-badge {
+  align-self: flex-start; font-size: 10px; font-weight: 700;
+  letter-spacing: 1px; padding: 2px 8px; border-radius: 999px;
+  background: var(--series-a); color: #fff;
+}
+.train-resume .tr-info { font-size: 12px; color: var(--ink); }
+.train-resume .mini-btn.danger { align-self: flex-start; margin-top: 2px; }
 .train-panel .stage-row {
   display: flex; gap: 6px; margin: 6px 0 10px;
 }
@@ -248,6 +261,9 @@ body {
   border-right: 1px solid var(--border);
   padding: 20px 16px;
   display: flex; flex-direction: column; gap: 12px;
+  /* 捲動主內容時固定在視窗左側，自身過長才內部捲動 */
+  position: sticky; top: 0; align-self: flex-start;
+  height: 100vh; overflow-y: auto;
 }
 .sidebar-head {
   display: flex; justify-content: space-between; align-items: center;
@@ -367,6 +383,30 @@ select {
 .main { flex: 1; padding: 20px 24px; min-width: 0; }
 .empty-state { color: var(--muted); padding: 60px; text-align: center; }
 
+/* 儀表板分頁 */
+.dash-tabs {
+  display: flex; gap: 4px; margin: 4px 0 16px;
+  border-bottom: 1px solid var(--border);
+}
+.dash-tab {
+  background: none; border: none; cursor: pointer;
+  color: var(--muted); font-size: 13px; font-weight: 600;
+  padding: 9px 16px; border-bottom: 2px solid transparent;
+  margin-bottom: -1px; transition: color 0.15s, border-color 0.15s;
+}
+.dash-tab:hover { color: var(--ink-2); }
+.dash-tab.active { color: var(--ink); border-bottom-color: var(--series-a); }
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
+/* 輔助通道並排：夠寬（≥ 2×440px）才兩欄，否則自動單欄——直式螢幕不會變擠 */
+.channel-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(440px, 1fr));
+  gap: 16px;
+}
+.channel-grid .chart-card { margin-bottom: 0; }  /* 間距交給 grid gap */
+
 .tiles {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 12px; margin-bottom: 16px;
@@ -396,6 +436,24 @@ select {
   font-size: 13px; font-weight: 600; color: var(--ink-2);
   margin: 0 0 6px;
 }
+/* 單張圖放大檢視 */
+.card-max-btn {
+  float: right; background: none; border: 1px solid var(--border);
+  color: var(--muted); cursor: pointer; font-size: 13px; line-height: 1;
+  padding: 2px 7px; border-radius: 6px; transition: all 0.15s;
+}
+.card-max-btn:hover { color: var(--ink); border-color: var(--baseline); }
+.card-backdrop {
+  position: fixed; inset: 0; background: rgba(0, 0, 0, 0.55);
+  z-index: 190;
+}
+.chart-card.card-max {
+  position: fixed; inset: 3vh 3vw; z-index: 200; margin: 0;
+  display: flex; flex-direction: column; overflow: auto;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+.chart-card.card-max > h2 { flex: none; }
+.chart-card.card-max .card-max-btn { border-color: var(--baseline); color: var(--ink); }
 .chart-card .unit { font-size: 11px; color: var(--muted); font-weight: 400; }
 .line-sample {
   display: inline-block; width: 22px; height: 0;
@@ -573,7 +631,30 @@ table.zones { width: 100%; border-collapse: collapse; font-variant-numeric: tabu
   .sidebar {
     width: 100%; border-right: none;
     border-bottom: 1px solid var(--border);
+    position: static; height: auto;   /* 窄視窗不 sticky */
   }
   .lap-list { max-height: 150px; }
   .tyre-card { width: 100%; }
+}
+
+/* ===== 亮色主題（跟隨系統設定；WebView2 依 Windows 應用程式主題） ===== */
+@media (prefers-color-scheme: light) {
+  :root {
+    --page: #f4f4f2;
+    --surface: #ffffff;
+    --surface-2: #ececea;
+    --ink: #1a1a19;
+    --ink-2: #3d3d39;
+    --muted: #6f6e69;
+    --grid: #d9d9d5;
+    --baseline: #c4c4bf;
+    --border: rgba(0, 0, 0, 0.12);
+    --series-a: #2563c9;   /* 亮底加深藍以維持對比 */
+    --series-b: #0f8a5f;
+    --loss: #d64545;
+    --gain: #0a8a0a;
+  }
+  /* 白色 tint 在亮底看不見 → 改用深色 tint */
+  .zones tbody tr:hover td { background: rgba(0, 0, 0, 0.04); }
+  .record-btn.armed { background: #fbe3e3; }
 }

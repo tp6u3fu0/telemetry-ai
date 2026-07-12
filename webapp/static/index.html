@@ -130,86 +130,109 @@
       </div>
       <div id="compare-toast" class="compare-toast" hidden></div>
 
-      <div class="tiles">
-        <div class="tile"><div class="tile-label" id="tile-a-label"><span class="dot dot-a"></span>參考圈 A</div>
-          <div class="tile-value" id="tile-a">–</div></div>
-        <div class="tile"><div class="tile-label" id="tile-b-label"><span class="dot dot-b"></span>比較圈 B</div>
-          <div class="tile-value" id="tile-b">–</div></div>
-        <div class="tile"><div class="tile-label" id="tile-delta-label">總差 (B−A)</div>
-          <div class="tile-value" id="tile-delta">–</div></div>
-        <div class="tile"><div class="tile-label" id="tile-worst-label">最大損失</div>
-          <div class="tile-value" id="tile-worst">–</div></div>
+      <nav class="dash-tabs" id="dash-tabs">
+        <button class="dash-tab active" data-panel="overview">總覽</button>
+        <button class="dash-tab" data-panel="channels">通道圖</button>
+        <button class="dash-tab" data-panel="zones">區段分析</button>
+        <button class="dash-tab" data-panel="coach">AI 教練</button>
+      </nav>
+
+      <!-- 總覽 -->
+      <div class="tab-panel active" data-panel="overview">
+        <div class="tiles">
+          <div class="tile"><div class="tile-label" id="tile-a-label"><span class="dot dot-a"></span>參考圈 A</div>
+            <div class="tile-value" id="tile-a">–</div></div>
+          <div class="tile"><div class="tile-label" id="tile-b-label"><span class="dot dot-b"></span>比較圈 B</div>
+            <div class="tile-value" id="tile-b">–</div></div>
+          <div class="tile"><div class="tile-label" id="tile-delta-label">總差 (B−A)</div>
+            <div class="tile-value" id="tile-delta">–</div></div>
+          <div class="tile"><div class="tile-label" id="tile-worst-label">最大損失</div>
+            <div class="tile-value" id="tile-worst">–</div></div>
+        </div>
+
+        <div class="map-row">
+          <section class="chart-card map-card" id="map-card">
+            <h2>賽道地圖 <span class="unit">紅 = B 損失路段，游標連動</span></h2>
+            <canvas id="track-map" width="600" height="360"></canvas>
+          </section>
+          <section class="chart-card tyre-card" id="tyre-card">
+            <h2>胎心溫度 / 胎壓 <span class="unit">整圈平均</span></h2>
+            <div class="tyre-cols">
+              <div><div class="tyre-col-label"><span class="dot dot-a"></span>A</div>
+                <div class="tyre-grid" id="tyres-a"></div></div>
+              <div><div class="tyre-col-label"><span class="dot dot-b"></span>B</div>
+                <div class="tyre-grid" id="tyres-b"></div></div>
+            </div>
+            <div class="tyre-note" id="tyre-note"></div>
+          </section>
+        </div>
+
+        <section class="chart-card">
+          <h2>微分段 delta <span class="unit">紅 = B 損失，綠 = B 賺，hover 看數值</span></h2>
+          <div id="microsectors" class="microsectors"></div>
+        </section>
       </div>
 
-      <div class="map-row">
-        <section class="chart-card map-card" id="map-card">
-          <h2>賽道地圖 <span class="unit">紅 = B 損失路段，游標連動</span></h2>
-          <canvas id="track-map" width="600" height="360"></canvas>
+      <!-- 通道圖 -->
+      <div class="tab-panel" data-panel="channels">
+        <div class="hint-bar">拖曳框選圖表可放大（五圖同步）· 雙擊還原 · 點擊微分段或下方區段列可跳至該路段 · 每張圖右上 ⤢ 可單獨放大</div>
+
+        <!-- 全寬主通道：速度 → Δt → 踏板，形成對齊的直行 -->
+        <section class="chart-card">
+          <h2>速度 <span class="unit">km/h</span>
+            <button id="speed-mode" class="mini-btn inline">顯示差值</button></h2>
+          <div id="chart-speed"></div>
         </section>
-        <section class="chart-card tyre-card" id="tyre-card">
-          <h2>胎心溫度 / 胎壓 <span class="unit">整圈平均</span></h2>
-          <div class="tyre-cols">
-            <div><div class="tyre-col-label"><span class="dot dot-a"></span>A</div>
-              <div class="tyre-grid" id="tyres-a"></div></div>
-            <div><div class="tyre-col-label"><span class="dot dot-b"></span>B</div>
-              <div class="tyre-grid" id="tyres-b"></div></div>
+        <section class="chart-card">
+          <h2>Δt <span class="unit">秒，正 = B 較慢</span></h2>
+          <div id="chart-delta"></div>
+        </section>
+        <section class="chart-card">
+          <h2>油門<span class="line-sample solid"></span> / 煞車<span class="line-sample dashed"></span> <span class="unit">%</span></h2>
+          <div id="chart-pedal"></div>
+        </section>
+        <!-- 方向盤／檔位：單一數值通道，寬螢幕自動並排、直式螢幕維持單欄 -->
+        <div class="channel-grid">
+          <section class="chart-card">
+            <h2>方向盤 <span class="unit">-1 左 ~ +1 右</span></h2>
+            <div id="chart-steering"></div>
+          </section>
+          <section class="chart-card">
+            <h2>檔位 <span class="unit"></span></h2>
+            <div id="chart-gear"></div>
+          </section>
+        </div>
+      </div>
+
+      <!-- 區段分析 -->
+      <div class="tab-panel" data-panel="zones">
+        <section class="chart-card">
+          <h2 id="zones-title">煞車區段分析 <span class="unit">依損失排序，含出彎後直線</span></h2>
+          <table class="zones" id="zones-table">
+            <thead><tr id="zones-head"></tr></thead>
+            <tbody></tbody>
+          </table>
+        </section>
+      </div>
+
+      <!-- AI 教練 -->
+      <div class="tab-panel" data-panel="coach">
+        <section class="chart-card coach-card">
+          <h2>AI 教練 <span class="unit" id="coach-subtitle">基於目前的遙測分析</span>
+            <button id="coach-clear" class="mini-btn inline">清除對話</button></h2>
+          <div id="coach-messages" class="coach-messages"></div>
+          <div class="coach-quick" id="coach-quick">
+            <button class="mini-btn quick-q">這圈哪裡可以更快？</button>
+            <button class="mini-btn quick-q">損失最大的彎該怎麼改進？</button>
+            <button class="mini-btn quick-q">我的煞車技巧有什麼問題？</button>
           </div>
-          <div class="tyre-note" id="tyre-note"></div>
+          <div class="coach-input-row">
+            <input id="coach-input" maxlength="500"
+                   placeholder="問教練…（Enter 送出，例如：Ascari 該怎麼開？）">
+            <button id="coach-send" class="mini-btn">送出</button>
+          </div>
         </section>
       </div>
-
-      <section class="chart-card">
-        <h2>微分段 delta <span class="unit">紅 = B 損失，綠 = B 賺，hover 看數值</span></h2>
-        <div id="microsectors" class="microsectors"></div>
-      </section>
-
-      <div class="hint-bar">拖曳框選圖表可放大（五圖同步）· 雙擊還原 · 點擊微分段或下方區段列可跳至該路段</div>
-
-      <section class="chart-card">
-        <h2>速度 <span class="unit">km/h</span>
-          <button id="speed-mode" class="mini-btn inline">顯示差值</button></h2>
-        <div id="chart-speed"></div>
-      </section>
-      <section class="chart-card">
-        <h2>油門<span class="line-sample solid"></span> / 煞車<span class="line-sample dashed"></span> <span class="unit">%</span></h2>
-        <div id="chart-pedal"></div>
-      </section>
-      <section class="chart-card">
-        <h2>方向盤 <span class="unit">-1 左 ~ +1 右</span></h2>
-        <div id="chart-steering"></div>
-      </section>
-      <section class="chart-card">
-        <h2>檔位 <span class="unit"></span></h2>
-        <div id="chart-gear"></div>
-      </section>
-      <section class="chart-card">
-        <h2>Δt <span class="unit">秒，正 = B 較慢</span></h2>
-        <div id="chart-delta"></div>
-      </section>
-
-      <section class="chart-card">
-        <h2 id="zones-title">煞車區段分析 <span class="unit">依損失排序，含出彎後直線</span></h2>
-        <table class="zones" id="zones-table">
-          <thead><tr id="zones-head"></tr></thead>
-          <tbody></tbody>
-        </table>
-      </section>
-
-      <section class="chart-card coach-card">
-        <h2>AI 教練 <span class="unit" id="coach-subtitle">基於目前的遙測分析</span>
-          <button id="coach-clear" class="mini-btn inline">清除對話</button></h2>
-        <div id="coach-messages" class="coach-messages"></div>
-        <div class="coach-quick" id="coach-quick">
-          <button class="mini-btn quick-q">這圈哪裡可以更快？</button>
-          <button class="mini-btn quick-q">損失最大的彎該怎麼改進？</button>
-          <button class="mini-btn quick-q">我的煞車技巧有什麼問題？</button>
-        </div>
-        <div class="coach-input-row">
-          <input id="coach-input" maxlength="500"
-                 placeholder="問教練…（Enter 送出，例如：Ascari 該怎麼開？）">
-          <button id="coach-send" class="mini-btn">送出</button>
-        </div>
-      </section>
     </div>
   </main>
 </div>

@@ -15,11 +15,14 @@ import webview
 from werkzeug.serving import make_server
 
 from .app import app
+from .paths import user_data_dir
 
 
 def main() -> None:
+    # 預設 DB：開發時 = 專案根 data/；打包後 = %LOCALAPPDATA%\ACC-Telemetry\data\
+    default_db = str(user_data_dir() / "data" / "telemetry.sqlite3")
     parser = argparse.ArgumentParser(description="ACC Telemetry 桌面版")
-    parser.add_argument("--db", default="data/telemetry.sqlite3")
+    parser.add_argument("--db", default=default_db)
     args = parser.parse_args()
     app.config["DB_PATH"] = args.db
 

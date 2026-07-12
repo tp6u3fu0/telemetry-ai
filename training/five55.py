@@ -182,6 +182,46 @@ class Five55:
             ],
         }
 
+    # -- 存檔 / 續傳（完整狀態，非 state() 的精簡版） ------------------------
+
+    def to_dict(self) -> dict:
+        """完整快照——含 streak/history/階段，可原樣還原以續傳暫停的訓練。"""
+        return {
+            "stage": self.stage.value,
+            "baseline_streak": list(self.baseline_streak),
+            "baseline_avg": self.baseline_avg,
+            "beat_streak": list(self.beat_streak),
+            "beat_avg": self.beat_avg,
+            "target_ms": self.target_ms,
+            "achieve_qualified": list(self.achieve_qualified),
+            "achieve_attempts": self.achieve_attempts,
+            "history": [
+                {"n": r.n, "time_ms": r.time_ms, "good": r.good,
+                 "stage": r.stage, "outcome": r.outcome}
+                for r in self.history
+            ],
+            "score": self.score,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Five55":
+        f = cls(
+            stage=Stage(d.get("stage", Stage.BASELINE.value)),
+            baseline_streak=list(d.get("baseline_streak", [])),
+            baseline_avg=d.get("baseline_avg"),
+            beat_streak=list(d.get("beat_streak", [])),
+            beat_avg=d.get("beat_avg"),
+            target_ms=d.get("target_ms"),
+            achieve_qualified=list(d.get("achieve_qualified", [])),
+            achieve_attempts=int(d.get("achieve_attempts", 0)),
+            score=d.get("score"),
+        )
+        f.history = [
+            LapRecord(r["n"], r["time_ms"], r["good"], r["stage"], r["outcome"])
+            for r in d.get("history", [])
+        ]
+        return f
+
 
 def _fmt(ms) -> str:
     if not ms or ms <= 0:

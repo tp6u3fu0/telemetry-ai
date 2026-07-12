@@ -356,7 +356,9 @@ def api_test_settings():
 def api_record_start():
     body = request.get_json(silent=True) or {}
     mode = body.get("mode", "record")
-    ok, msg = recording_service.start(app.config["DB_PATH"], mode=mode)
+    resume = bool(body.get("resume", False))
+    ok, msg = recording_service.start(app.config["DB_PATH"], mode=mode,
+                                      resume=resume)
     return jsonify({"ok": ok, "message": msg}), (200 if ok else 409)
 
 
@@ -367,6 +369,36 @@ def api_train_target():
         return jsonify({"ok": False, "message": "需要 ms"}), 400
     ok, msg = recording_service.set_target(int(ms))
     return jsonify({"ok": ok, "message": msg}), (200 if ok else 409)
+
+
+@app.get("/api/train/progress")
+def api_train_progress():
+    """首頁用：是否有暫停中的訓練可續傳（附精簡狀態供顯示）。"""
+    from training.five55 import Five55
+    db = _db()
+    try:
+        prog = db.get_training_progress()
+    finally:
+        db.close()
+    if not prog:
+        return jsonify({"exists": False})
+    state = Five55.from_dict(prog["state"]).state()
+    return jsonify({"exists": True, "game": prog["game"],
+                    "track": prog["track"], "updated_at": prog["updated_at"],
+                    "state": state})
+
+
+@app.post("/api/train/discard")
+def api_train_discard():
+    """放棄暫停中的訓練（清掉插槽，下次從頭）。"""
+    if recording_service.active:
+        return jsonify({"ok": False, "message": "訓練進行中，請先停止"}), 409
+    db = _db()
+    try:
+        db.clear_training_progress()
+    finally:
+        db.close()
+    return jsonify({"ok": True, "message": "已放棄暫停的訓練"})
 
 
 @app.get("/api/trainings")

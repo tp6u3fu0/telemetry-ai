@@ -6,9 +6,10 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
-_TRACKS_DIR = Path(__file__).resolve().parent.parent / "data" / "tracks"
+from webapp.paths import resource_dir
+
+_TRACKS_DIR = resource_dir() / "data" / "tracks"
 
 
 def load_corners(game: str, track: str) -> list | None:

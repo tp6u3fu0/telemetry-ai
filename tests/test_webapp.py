@@ -22,7 +22,7 @@ CRITICAL_IDS = [
     # 三大視圖
     "home-view", "focus-view", "dashboard-view",
     # 首頁動作
-    "record-btn", "record-status", "train-start", "train-panel",
+    "record-btn", "record-status", "train-enter", "train-panel",
     "personal-bests", "session-cards",
     # 儀表板分頁
     "dash-tabs", "session-select", "driver-select", "lap-palette",
@@ -37,9 +37,9 @@ CRITICAL_IDS = [
     # 教練
     "coach-messages", "coach-input", "coach-send",
     # 專注畫面
-    "focus-cur-time", "focus-lapcount", "focus-stop",
-    # 設定
-    "setting-api-key", "setting-model",
+    "focus-cur-time", "focus-lapcount", "focus-primary", "focus-home",
+    # 設定（多供應商）
+    "setting-provider", "setting-api-key", "setting-model", "setting-base-url",
 ]
 TAB_PANELS = ["overview", "channels", "zones", "coach"]
 # app.js 不該被截斷——這些函式在才代表核心行為都在

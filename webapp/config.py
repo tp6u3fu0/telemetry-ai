@@ -12,8 +12,15 @@ from .paths import user_data_dir
 CONFIG_PATH = user_data_dir() / "config.json"
 
 DEFAULTS = {
-    "anthropic_api_key": "",
+    # AI 教練供應商：anthropic / openai / google / local（OpenAI 相容端點）
+    "coach_provider": "anthropic",
     "coach_model": "claude-sonnet-5",
+    "anthropic_api_key": "",
+    "openai_api_key": "",
+    "google_api_key": "",
+    # local：任何 OpenAI 相容伺服器（Ollama / LM Studio / llama.cpp …）
+    "local_base_url": "http://localhost:11434/v1",
+    "local_api_key": "",
 }
 
 

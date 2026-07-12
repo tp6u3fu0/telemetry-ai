@@ -9,7 +9,6 @@ from __future__ import annotations
 import argparse
 import os
 
-import anthropic
 import numpy as np
 from flask import Flask, Response, jsonify, request, stream_with_context
 
@@ -209,7 +208,7 @@ def api_compare():
 def api_coach():
     """AI 教練對話。body: {a, b?, messages}。b 省略 = 單圈分析。成功後自動存檔。"""
     if not coach.has_credentials():
-        return jsonify({"error": "尚未設定 Claude API 金鑰。"
+        return jsonify({"error": "尚未設定 AI 教練的 API 金鑰。"
                                  "點左上角 ⚙ 設定即可，不需重啟。"}), 503
     body = request.get_json(silent=True) or {}
     lap_a, lap_b = body.get("a"), body.get("b")
@@ -228,7 +227,7 @@ def api_coach():
                 summary = summarize_single(analysis, corner_names)
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
-        system_blocks = coach.build_context(
+        context = coach.build_context(
             summary=summary,
             track=session["track"] if session else "",
             car=session["car_model"] if session else "",
@@ -244,20 +243,15 @@ def api_coach():
     def generate():
         collected = []
         try:
-            for chunk in coach.ask_stream(system_blocks, messages):
+            for chunk in coach.ask_stream(context, messages):
                 collected.append(chunk)
                 yield chunk
-        except anthropic.AuthenticationError:
-            yield "\n\n[教練錯誤：API 金鑰無效，請到 ⚙ 設定檢查]"
-            return
-        except anthropic.RateLimitError:
-            yield "\n\n[教練錯誤：API 速率限制，稍後再試]"
-            return
-        except anthropic.APIStatusError as exc:
-            yield f"\n\n[教練錯誤：Claude API {exc.status_code}]"
-            return
-        except anthropic.APIConnectionError:
-            yield "\n\n[教練錯誤：無法連線到 Claude API]"
+        except Exception as exc:                     # noqa: BLE001
+            # 各供應商例外型別不一，統一以文字回報（多發生在串流開始時）
+            import traceback
+            traceback.print_exc()
+            msg = str(exc) or exc.__class__.__name__
+            yield f"\n\n[教練錯誤：{msg[:200]}]"
             return
         reply = "".join(collected)
         if reply:
@@ -320,14 +314,26 @@ def api_rename_session(session_id: int):
         db.close()
 
 
+_KEY_FIELDS = {"anthropic": "anthropic_api_key", "openai": "openai_api_key",
+               "google": "google_api_key", "local": "local_api_key"}
+
+
 @app.get("/api/settings")
 def api_get_settings():
     cfg = load_config()
-    key = cfg.get("anthropic_api_key", "").strip()
+
+    def hint(field):
+        k = cfg.get(field, "").strip()
+        return f"…{k[-4:]}" if len(k) >= 8 else ("已設定" if k else "")
+
     return jsonify({
+        "coach_provider": cfg.get("coach_provider", "anthropic"),
         "coach_model": cfg.get("coach_model", "claude-sonnet-5"),
-        "api_key_set": bool(key),
-        "api_key_hint": f"…{key[-4:]}" if len(key) >= 8 else "",
+        "local_base_url": cfg.get("local_base_url", "http://localhost:11434/v1"),
+        # 各供應商金鑰只回「是否已設定」與末四碼提示，不回明文
+        "keys_set": {p: bool(cfg.get(f, "").strip())
+                     for p, f in _KEY_FIELDS.items()},
+        "key_hints": {p: hint(f) for p, f in _KEY_FIELDS.items()},
         "env_key_set": bool(os.environ.get("ANTHROPIC_API_KEY")),
     })
 
@@ -336,10 +342,16 @@ def api_get_settings():
 def api_save_settings():
     body = request.get_json(silent=True) or {}
     updates = {}
-    if "api_key" in body:                    # 空字串 = 清除金鑰
-        updates["anthropic_api_key"] = str(body["api_key"]).strip()
+    if "coach_provider" in body:
+        updates["coach_provider"] = str(body["coach_provider"]).strip()
     if "coach_model" in body:
         updates["coach_model"] = str(body["coach_model"]).strip()
+    if "local_base_url" in body:
+        updates["local_base_url"] = str(body["local_base_url"]).strip()
+    # 金鑰：key_provider 指定要更新哪一家；空字串 = 清除
+    kp = body.get("key_provider")
+    if kp in _KEY_FIELDS and "api_key" in body:
+        updates[_KEY_FIELDS[kp]] = str(body["api_key"]).strip()
     save_config(updates)
     return jsonify({"ok": True})
 

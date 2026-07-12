@@ -15,16 +15,25 @@
   <div class="modal">
     <div class="modal-head"><span>設定</span>
       <button id="settings-close" class="icon-btn" title="關閉">✕</button></div>
-    <div class="field-label">Claude API 金鑰</div>
+    <div class="field-label">教練供應商</div>
+    <select id="setting-provider">
+      <option value="anthropic">Anthropic（Claude）</option>
+      <option value="openai">OpenAI</option>
+      <option value="google">Google（Gemini）</option>
+      <option value="local">本地 / 自訂（OpenAI 相容）</option>
+    </select>
+    <div id="setting-local-row" hidden>
+      <div class="field-label" style="margin-top:10px">伺服器網址 Base URL</div>
+      <input id="setting-base-url" type="text"
+             placeholder="http://localhost:11434/v1" autocomplete="off">
+    </div>
+    <div class="field-label" style="margin-top:10px" id="setting-key-label">API 金鑰</div>
     <input id="setting-api-key" type="password" placeholder="sk-ant-..."
            autocomplete="off">
     <div id="setting-key-status" class="setting-status"></div>
-    <div class="field-label" style="margin-top:10px">教練模型</div>
-    <select id="setting-model">
-      <option value="claude-sonnet-5">Sonnet 5（推薦，品質/成本平衡）</option>
-      <option value="claude-opus-4-8">Opus 4.8（最強，較貴）</option>
-      <option value="claude-haiku-4-5">Haiku 4.5（最快最省）</option>
-    </select>
+    <div class="field-label" style="margin-top:10px">模型</div>
+    <input id="setting-model" type="text" placeholder="claude-sonnet-5"
+           autocomplete="off">
     <div class="settings-actions">
       <button id="setting-save" class="mini-btn">儲存</button>
       <button id="setting-test" class="mini-btn">測試連線</button>
@@ -47,11 +56,13 @@
         自動偵測 ACC / iRacing / F1 25</div>
     </div>
     <div class="action-card" id="train-card">
-      <div class="action-card-title">🏁 555 訓練
-        <button id="train-start" class="mini-btn inline">開始</button></div>
+      <div class="action-card-title">🏁 555 訓練</div>
+      <button id="train-enter" class="record-btn train-enter-btn">進入 555 訓練</button>
       <div id="train-panel" class="train-panel">
         <div class="train-hint">連續 5 圈零失誤 → 5 圈超越均速 → 設目標 → 達標 5 圈</div>
       </div>
+      <div class="train-credit">訓練法源自賽車一丁的影片
+        《<a href="https://youtu.be/_JJEQIiwphw" target="_blank" rel="noopener noreferrer">不養成好習慣, 就是在培養一個壞習慣</a>》</div>
     </div>
   </div>
   <section class="home-sec"><h2>個人最佳</h2>
@@ -65,8 +76,9 @@
 <!-- 555 訓練專注畫面 -->
 <div id="focus-view" hidden>
   <div class="focus-top">
+    <button id="focus-home" class="mini-btn">← 首頁</button>
     <div class="focus-stage" id="focus-stage">555 訓練</div>
-    <button id="focus-stop" class="mini-btn">停止</button>
+    <span class="focus-top-spacer"></span>
   </div>
   <div class="focus-req" id="focus-req"></div>
   <div class="focus-progress" id="focus-progress"></div>
@@ -75,6 +87,10 @@
     <div class="focus-cur-label">當前一圈</div>
     <div class="focus-cur-time" id="focus-cur-time">--:--.---</div>
     <div class="focus-lapcount" id="focus-lapcount">已完成 0 圈</div>
+  </div>
+
+  <div class="focus-controls">
+    <button id="focus-primary" class="record-btn">▶ 開始訓練</button>
   </div>
 
   <div class="focus-target" id="focus-target" hidden></div>

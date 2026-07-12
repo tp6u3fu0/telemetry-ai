@@ -279,18 +279,11 @@ function setRecordUI(st) {
 async function pollRecordStatus() {
   const st = await fetchJSON("/api/record/status");
   const active = st.phase === "waiting" || st.phase === "recording";
-  const isTrain = st.mode === "train";
 
-  // 訓練模式 → 專注畫面（完成後 recording 仍在跑，active 仍 true，續顯示得分）
-  if (isTrain && active) {
-    if (!inFocus) showFocus();
+  // 專注畫面自己管理進出——即使沒偵測到遊戲（waiting）也留著，絕不自動跳回首頁
+  if (inFocus) {
     renderFocus(st);
-  } else if (inFocus && !isTrain) {
-    exitFocus();               // 訓練被外部結束 → 離開專注畫面
-    goHome();
-  }
-
-  if (!inFocus) {
+  } else {
     setRecordUI(st);
     renderTrainPanel(st);
   }
@@ -1233,17 +1226,47 @@ function setupCoach() {
 
 /* ---------- 設定 ---------- */
 
+let settingsData = null;   // 最近一次 /api/settings 回應
+
+const PROVIDER_META = {
+  anthropic: { model: "claude-sonnet-5", key: "sk-ant-...", keyLabel: "API 金鑰",
+               help: "到 console.anthropic.com 取得金鑰" },
+  openai:    { model: "gpt-4o", key: "sk-...", keyLabel: "API 金鑰",
+               help: "到 platform.openai.com 取得金鑰" },
+  google:    { model: "gemini-2.0-flash", key: "AIza...", keyLabel: "API 金鑰",
+               help: "到 aistudio.google.com 取得金鑰" },
+  local:     { model: "llama3.1", key: "（通常留空）", keyLabel: "API 金鑰（選填）",
+               help: "任何 OpenAI 相容伺服器：Ollama / LM Studio / llama.cpp…" },
+};
+
+function applyProviderUI(p) {
+  const meta = PROVIDER_META[p] || PROVIDER_META.anthropic;
+  $("setting-local-row").hidden = p !== "local";
+  $("setting-key-label").textContent = meta.keyLabel;
+  $("setting-api-key").placeholder = meta.key;
+  $("setting-model").placeholder = meta.model;
+  const st = $("setting-key-status");
+  const set = settingsData && settingsData.keys_set && settingsData.keys_set[p];
+  const hint = settingsData && settingsData.key_hints && settingsData.key_hints[p];
+  if (set) {
+    st.textContent = `已設定（${hint}）— 輸入新值可覆蓋`;
+  } else if (p === "anthropic" && settingsData && settingsData.env_key_set) {
+    st.textContent = "使用環境變數 ANTHROPIC_API_KEY 中的金鑰";
+  } else if (p === "local") {
+    st.textContent = meta.help;
+  } else {
+    st.textContent = "尚未設定。" + meta.help;
+  }
+}
+
 async function loadSettings() {
   const s = await fetchJSON("/api/settings");
-  $("setting-model").value = s.coach_model;
-  const status = $("setting-key-status");
-  if (s.api_key_set) {
-    status.textContent = `已設定（${s.api_key_hint}）— 輸入新值可覆蓋`;
-  } else if (s.env_key_set) {
-    status.textContent = "使用環境變數 ANTHROPIC_API_KEY 中的金鑰";
-  } else {
-    status.textContent = "尚未設定。到 console.anthropic.com 取得 API 金鑰。";
-  }
+  settingsData = s;
+  $("setting-provider").value = s.coach_provider;
+  $("setting-model").value = s.coach_model || "";
+  $("setting-base-url").value = s.local_base_url || "";
+  $("setting-api-key").value = "";
+  applyProviderUI(s.coach_provider);
 }
 
 /* ---------- 555 訓練 UI ---------- */
@@ -1269,103 +1292,39 @@ function dots5(filled) {
   return h;
 }
 
+// 首頁的 555 卡片只是入口——實際開始/暫停/設目標都在專注畫面
 function renderTrainPanel(st) {
   const panel = $("train-panel");
-  const startBtn = $("train-start");
+  const btn = $("train-enter");
   const active = (st.phase === "waiting" || st.phase === "recording");
-  const t = st.training;
+  const otherRecording = active && st.mode !== "train";
 
-  if (!active || st.mode !== "train" || !t) {
-    // 非訓練狀態：顯示提示 + 「開始」；若剛完成則保留分數在訓練紀錄區
-    startBtn.disabled = active && st.mode !== "train";  // 一般錄製中不能開訓練
-    if (active && st.mode !== "train") {
-      startBtn.textContent = "開始";
-      panel.innerHTML = '<div class="train-hint">錄製進行中，停止後才能開始訓練。</div>';
-      return;
-    }
-    if (pausedTraining && pausedTraining.state) {
-      // 有暫停中的訓練 → 主鍵改「繼續」，另附「放棄重來」
-      const ps = pausedTraining.state;
-      const when = (pausedTraining.updated_at || "").replace("T", " ");
-      startBtn.textContent = "繼續訓練";
-      panel.innerHTML =
-        `<div class="train-resume">
-           <div class="tr-badge">暫停中</div>
-           <div class="tr-info"><b>${ps.stage_label}</b> · ${ps.requirement}</div>
-           <div class="train-hint">${pausedTraining.track || "?"} · 上次 ${when}</div>
-           <button id="train-discard" class="mini-btn danger">放棄，重新開始</button>
-         </div>`;
-      $("train-discard").onclick = async () => {
-        await fetchJSON("/api/train/discard", { method: "POST" }).catch(() => {});
-        pausedTraining = null;
-        renderTrainPanel(st);
-      };
-      return;
-    }
-    startBtn.textContent = "開始";
-    panel.innerHTML =
-      '<div class="train-hint">連續 5 圈零失誤 → 5 圈超越均速 → 設目標 → 達標 5 圈</div>';
+  btn.disabled = otherRecording;
+  if (otherRecording) {
+    btn.textContent = "進入 555 訓練";
+    panel.innerHTML = '<div class="train-hint">錄製進行中，停止後才能訓練。</div>';
     return;
   }
 
-  startBtn.textContent = "停止";
-  startBtn.disabled = false;
+  btn.textContent = pausedTraining ? "繼續 555 訓練" : "進入 555 訓練";
 
-  // 階段指示
-  let pips = STAGES.map(([key, label]) => {
-    const idx = STAGES.findIndex((s) => s[0] === t.stage);
-    const myIdx = STAGES.findIndex((s) => s[0] === key);
-    const cls = key === t.stage ? "active" : myIdx < idx ? "done" : "";
-    return `<div class="stage-pip ${cls}">${label}</div>`;
-  }).join("");
-
-  let body = `<div class="stage-row">${pips}</div>
-    <div class="train-req">${t.requirement}</div>`;
-
-  if (t.stage === "baseline") {
-    body += `<div class="train-progress">${dots5(t.baseline_progress)}</div>`;
-  } else if (t.stage === "beat") {
-    body += `<div class="train-progress">${dots5(t.beat_progress)}</div>`;
-  } else if (t.stage === "set_target") {
-    const sugSec = (t.suggested_target / 1000).toFixed(3);
-    body += `<div class="train-target-row">
-      <input id="train-target-input" value="${sugSec}" placeholder="秒數，如 88.5 或 1:28.5">
-      <button id="train-target-set" class="mini-btn">設定</button></div>
-      <div class="train-hint">建議 ${fmtLap(t.suggested_target)}（超越均速快 0.5 秒）</div>`;
-  } else if (t.stage === "achieve") {
-    body += `<div class="train-progress">${dots5(t.achieve_progress)}</div>
-      <div class="train-hint">目標 ${fmtLap(t.target_ms)} · 已嘗試 ${t.achieve_attempts} 圈</div>`;
-  } else if (t.stage === "done" && t.score) {
-    const s = t.score;
-    body += `<div class="train-score">
-      <div class="sc-item sc-total"><div class="sc-num">${s.total}</div><div class="sc-lbl">總分</div></div>
-      <div class="sc-item"><div class="sc-num">${s.consistency}</div><div class="sc-lbl">一致性</div></div>
-      <div class="sc-item"><div class="sc-num">${s.improvement}</div><div class="sc-lbl">進步</div></div>
-      <div class="sc-item"><div class="sc-num">${s.ambition}</div><div class="sc-lbl">企圖心</div></div>
-      <div class="sc-item"><div class="sc-num">${s.efficiency}</div><div class="sc-lbl">效率</div></div>
-    </div>`;
-  }
-
-  // 最近幾圈
-  if (t.recent && t.recent.length) {
-    body += '<div class="train-recent">' + t.recent.map((r) => {
-      const cls = r.good ? "lap-ok" : "lap-bad";
-      const time = r.time_ms ? fmtLap(r.time_ms) : "無效";
-      return `<span class="${cls}">${time}</span>`;
-    }).join(" · ") + "</div>";
-  }
-
-  panel.innerHTML = body;
-
-  if (t.stage === "set_target") {
-    $("train-target-set").onclick = async () => {
-      const ms = parseTimeToMs($("train-target-input").value);
-      if (!ms) return;
-      await fetchJSON("/api/train/target", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ms }),
-      }).catch(() => {});
+  if (pausedTraining && pausedTraining.state) {
+    const ps = pausedTraining.state;
+    panel.innerHTML =
+      `<div class="train-resume">
+         <div class="tr-badge">暫停中</div>
+         <div class="tr-info"><b>${ps.stage_label}</b> · ${ps.requirement}</div>
+         <button id="train-discard" class="mini-btn danger">放棄進度</button>
+       </div>`;
+    $("train-discard").onclick = async (e) => {
+      e.stopPropagation();
+      await fetchJSON("/api/train/discard", { method: "POST" }).catch(() => {});
+      pausedTraining = null;
+      renderTrainPanel(st);
     };
+  } else {
+    panel.innerHTML =
+      '<div class="train-hint">連續 5 圈零失誤 → 5 圈超越均速 → 設目標 → 達標 5 圈</div>';
   }
 }
 
@@ -1426,8 +1385,33 @@ function exitFocus() {
 
 function renderFocus(st) {
   const t = st.training;
-  $("focus-stage").textContent = "555 訓練" + (t ? " · " + t.stage_label : "");
-  $("focus-req").textContent = t ? t.requirement : "等待進入賽道…";
+  const active = st.phase === "recording" || st.phase === "waiting";
+  const done = t && t.stage === "done";
+  const ps = pausedTraining && pausedTraining.state;
+
+  // 主控鈕：開始 / 暫停 / 完成返回
+  const primary = $("focus-primary");
+  if (done) {
+    primary.textContent = "🏁 完成，返回首頁";
+    primary.className = "record-btn";
+    primary.dataset.act = "home";
+  } else if (active) {
+    primary.textContent = "⏸ 暫停";
+    primary.className = "record-btn armed";
+    primary.dataset.act = "pause";
+  } else {
+    primary.textContent = ps ? "▶ 繼續訓練" : "▶ 開始訓練";
+    primary.className = "record-btn";
+    primary.dataset.act = "start";
+  }
+
+  const stageLabel = t ? t.stage_label : (ps ? ps.stage_label : null);
+  $("focus-stage").textContent = "555 訓練" + (stageLabel ? " · " + stageLabel : "");
+  $("focus-req").textContent =
+    t ? t.requirement
+      : active ? "等待進入賽道…"
+      : ps ? "暫停中：" + ps.requirement
+      : "按「開始訓練」後進遊戲跑圈";
   // 平滑跳動：有原始毫秒就交給 ticker 內插，否則退回輪詢的格式化字串
   if (st.phase === "recording" && st.current_lap_ms != null) {
     syncTicker(st.current_lap_ms);
@@ -1478,10 +1462,8 @@ function renderFocus(st) {
       `<div class="fs-total">${t.score.total}</div>` +
       `<div class="fs-sub">一致性 ${t.score.consistency} · 進步 ${t.score.improvement}` +
       ` · 企圖心 ${t.score.ambition} · 效率 ${t.score.efficiency}</div>`;
-    $("focus-stop").textContent = "完成 · 返回首頁";
   } else {
     sc.hidden = true;
-    $("focus-stop").textContent = "停止";
   }
 
   // 圈速清單（新的在下）
@@ -1496,8 +1478,51 @@ function renderFocus(st) {
   }
 }
 
-async function stopTraining() {
-  await fetchJSON("/api/record/stop", { method: "POST" }).catch(() => {});
+async function refreshPaused() {
+  try {
+    const p = await fetchJSON("/api/train/progress");
+    pausedTraining = p && p.exists ? p : null;
+  } catch (e) { pausedTraining = null; }
+}
+
+// 首頁「進入 555 訓練」——只是進專注畫面，不自動開始
+async function enterTrainingFocus() {
+  await refreshPaused();
+  showFocus();
+  if (recordPoll) clearTimeout(recordPoll);
+  pollRecordStatus();     // 立即渲染現況（多半是 idle，等使用者按開始）
+}
+
+// 專注畫面主控鈕：開始/繼續 · 暫停 · 完成返回
+async function focusPrimary() {
+  const act = $("focus-primary").dataset.act;
+  if (act === "start") {
+    const resume = !!pausedTraining;
+    await fetchJSON("/api/record/start", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: "train", resume }),
+    });
+    lastLapsSaved = 0;
+    if (recordPoll) clearTimeout(recordPoll);
+    pollRecordStatus();
+  } else if (act === "pause") {
+    // 暫停 = 停止錄製（進度已逐圈存檔），留在專注畫面
+    await fetchJSON("/api/record/stop", { method: "POST" }).catch(() => {});
+    if (recordPoll) clearTimeout(recordPoll);
+    recordPoll = null;
+    await refreshPaused();
+    renderFocus(await fetchJSON("/api/record/status"));
+  } else {                // "home"：完成後返回
+    await leaveFocusStopping();
+  }
+}
+
+// 離開專注畫面——若還在錄製先停（進度保留），回首頁
+async function leaveFocusStopping() {
+  const st = await fetchJSON("/api/record/status");
+  if (st.phase === "waiting" || st.phase === "recording") {
+    await fetchJSON("/api/record/stop", { method: "POST" }).catch(() => {});
+  }
   if (recordPoll) clearTimeout(recordPoll);
   recordPoll = null;
   exitFocus();
@@ -1505,23 +1530,9 @@ async function stopTraining() {
 }
 
 function setupTraining() {
-  $("train-start").onclick = async () => {
-    const st = await fetchJSON("/api/record/status");
-    const active = st.phase === "waiting" || st.phase === "recording";
-    if (active && st.mode === "train") {
-      await stopTraining();
-    } else if (!active) {
-      const resume = !!pausedTraining;   // 有暫停進度 → 續傳
-      await fetchJSON("/api/record/start", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: "train", resume }),
-      });
-      lastLapsSaved = 0;
-      showFocus();          // 立刻切到專注畫面
-      pollRecordStatus();
-    }
-  };
-  $("focus-stop").onclick = stopTraining;
+  $("train-enter").onclick = enterTrainingFocus;
+  $("focus-primary").onclick = focusPrimary;
+  $("focus-home").onclick = leaveFocusStopping;
 }
 
 /* ---------- 設定 modal ---------- */
@@ -1539,11 +1550,23 @@ function setupSettings() {
   $("settings-overlay").onclick = (e) => {
     if (e.target === $("settings-overlay")) $("settings-overlay").hidden = true;
   };
+  // 切換供應商：更新欄位提示、預填該家預設模型、清空金鑰輸入
+  $("setting-provider").onchange = () => {
+    const p = $("setting-provider").value;
+    $("setting-model").value = (PROVIDER_META[p] || {}).model || "";
+    $("setting-api-key").value = "";
+    applyProviderUI(p);
+  };
   $("setting-save").onclick = async () => {
     const result = $("setting-result");
-    const body = { coach_model: $("setting-model").value };
+    const provider = $("setting-provider").value;
+    const body = {
+      coach_provider: provider,
+      coach_model: $("setting-model").value.trim(),
+    };
+    if (provider === "local") body.local_base_url = $("setting-base-url").value.trim();
     const key = $("setting-api-key").value.trim();
-    if (key) body.api_key = key;           // 留空 = 不動既有金鑰
+    if (key) { body.key_provider = provider; body.api_key = key; }  // 留空 = 不動既有金鑰
     try {
       await fetchJSON("/api/settings", {
         method: "POST",

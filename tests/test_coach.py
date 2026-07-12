@@ -52,26 +52,37 @@ def main() -> int:
     if 9 in names:
         failures.append("直線上的區段不應有彎名")
 
-    # -- 教練 context 組裝 --
-    blocks = coach.build_context("摘要內容：B 共慢 +1.357 秒", "monza", "ferrari_296_gt3")
-    text_all = " ".join(b["text"] for b in blocks)
-    if "賽車教練" not in blocks[0]["text"]:
+    # -- 教練 context 組裝（中性 dict） --
+    ctx = coach.build_context("摘要內容：B 共慢 +1.357 秒", "monza", "ferrari_296_gt3")
+    if "賽車教練" not in ctx["persona"]:
         failures.append("persona 遺失")
-    if "速度聖殿" not in text_all:
+    if not ctx["knowledge"] or "速度聖殿" not in ctx["knowledge"]:
         failures.append("Monza 知識文件未載入")
-    if "B 共慢 +1.357" not in text_all:
+    if "B 共慢 +1.357" not in ctx["analysis"]:
         failures.append("遙測摘要未進 context")
+
+    # Anthropic system blocks：最後一塊掛 cache_control
+    blocks = coach._anthropic_system(ctx)
     if "cache_control" not in blocks[-1]:
         failures.append("最後一個 block 應掛 cache_control")
+    if "賽車教練" not in blocks[0]["text"]:
+        failures.append("blocks persona 遺失")
+
+    # OpenAI 相容：單一 system 字串含全部三段
+    sys_text = coach._system_text(ctx)
+    if not all(s in sys_text for s in ("賽車教練", "速度聖殿", "B 共慢 +1.357")):
+        failures.append("system 字串組裝不完整")
+
     # 未知賽道：知識文件缺席但不噴錯
-    blocks2 = coach.build_context("x", "unknown_track", "car")
-    if any("速度聖殿" in b["text"] for b in blocks2):
-        failures.append("未知賽道不應載入 monza 知識")
+    ctx2 = coach.build_context("x", "unknown_track", "car")
+    if ctx2["knowledge"] is not None:
+        failures.append("未知賽道不應載入知識文件")
 
     # -- live smoke（僅在有金鑰時） --
     if coach.has_credentials() and os.environ.get("COACH_LIVE_TEST") == "1":
         try:
-            reply = coach.ask(blocks, [{"role": "user", "content": "一句話：我最該改進哪裡？"}])
+            reply = "".join(coach.ask_stream(
+                ctx, [{"role": "user", "content": "一句話：我最該改進哪裡？"}]))
             if not reply or len(reply) < 5:
                 failures.append(f"live 回覆異常: {reply!r}")
             else:

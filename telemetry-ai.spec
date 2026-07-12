@@ -22,6 +22,7 @@ datas += collect_data_files("webview")        # pywebview 內建 JS
 
 hiddenimports = ["irsdk"]
 hiddenimports += collect_submodules("anthropic")
+hiddenimports += collect_submodules("openai")   # 教練供應商（延遲 import）
 hiddenimports += collect_submodules("webview")  # 平台後端（edgechromium 等）
 
 a = Analysis(

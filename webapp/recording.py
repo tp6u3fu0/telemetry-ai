@@ -71,7 +71,8 @@ class RecordingService:
                 reader = detect_live(readers)
                 if reader is not None:
                     break
-                self.status = {"phase": "waiting"}
+                # 保留 mode——否則訓練等待遊戲時前端會誤判「非訓練」而跳離專注畫面
+                self.status = {"phase": "waiting", "mode": self._mode}
                 time.sleep(0.5)
             if self._stop.is_set():
                 self.status = {"phase": "idle", "message": "已取消（未偵測到遊戲）"}
@@ -138,6 +139,7 @@ class RecordingService:
                     tracker.process(reader.read_opponents(), time.monotonic())
                 self.status.update({
                     "phase": "recording",
+                    "mode": self._mode,
                     "session_id": session_id,
                     "game": reader.game,
                     "game_name": reader.display_name,

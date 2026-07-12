@@ -52,6 +52,17 @@ body {
   font-size: 13px; color: var(--ink-2); margin-bottom: 12px; font-weight: 600;
   display: flex; justify-content: space-between; align-items: center;
 }
+/* 首頁「進入 555 訓練」大按鈕 */
+.train-enter-btn {
+  padding: 15px; font-size: 16px; border-radius: 10px;
+  background: rgba(57, 135, 229, 0.14); border-color: var(--series-a);
+}
+.train-enter-btn:hover { background: rgba(57, 135, 229, 0.22); }
+.train-enter-btn:disabled { opacity: 0.5; cursor: default; }
+.train-credit { font-size: 10px; color: var(--muted); margin-top: 10px; line-height: 1.5; }
+.train-credit a { color: var(--muted); text-decoration: underline; }
+.train-credit a:hover { color: var(--ink-2); }
+.train-panel { margin-top: 10px; }
 .home-sec { margin-bottom: 24px; }
 .home-sec h2 {
   font-size: 13px; color: var(--muted); letter-spacing: 1px;
@@ -148,6 +159,9 @@ body {
   font-variant-numeric: tabular-nums; color: var(--ink);
 }
 .focus-lapcount { font-size: 22px; color: var(--ink-2); margin-top: 8px; }
+.focus-top-spacer { width: 64px; }        /* 讓 stage 置中（平衡左側首頁鈕） */
+.focus-controls { width: 100%; max-width: 420px; margin: 4px auto 0; }
+.focus-controls .record-btn { padding: 16px; font-size: 18px; border-radius: 10px; }
 
 .focus-target { display: flex; gap: 8px; margin-bottom: 12px; }
 .focus-target input {

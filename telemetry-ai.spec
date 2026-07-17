@@ -59,5 +59,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,
+    icon="assets/icon.ico",   # Δ Delta app 磚圖標（exe / 工作列 / 桌面捷徑）
 )

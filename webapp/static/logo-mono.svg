@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Telemetry AI">
+  <title>Telemetry AI</title>
+  <desc>Δ 單色版：去色後仍成立，stroke 使用 currentColor 可繼承任意文字顏色</desc>
+  <path d="M12 50 L32 14 L52 50 Z" fill="none" stroke="currentColor" stroke-width="7"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

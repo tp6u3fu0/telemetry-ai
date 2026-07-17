@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Telemetry AI">
+  <title>Telemetry AI</title>
+  <desc>兩條賽道線（A 藍 / B 綠）收斂成 Δ，代表圈速差值比較</desc>
+  <g fill="none" stroke-linecap="round">
+    <path d="M12 50 L32 14" stroke="#3987e5" stroke-width="7"/>
+    <path d="M52 50 L32 14" stroke="#199e70" stroke-width="7"/>
+    <path d="M12 50 L32 50" stroke="#3987e5" stroke-width="7"/>
+    <path d="M32 50 L52 50" stroke="#199e70" stroke-width="7"/>
+  </g>
+</svg>

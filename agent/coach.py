@@ -20,6 +20,12 @@ from pathlib import Path
 from webapp.config import load_config
 
 _KNOWLEDGE_DIR = Path(__file__).resolve().parent.parent / "knowledge"
+_PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
+
+
+def _load_prompt(name: str) -> str:
+    """讀取 agent/prompts/{name}.md（prompt 檔案化，改 prompt 不用動程式）。"""
+    return (_PROMPTS_DIR / f"{name}.md").read_text(encoding="utf-8")
 
 # 各供應商的預設模型（使用者可在設定覆寫）
 _DEFAULT_MODEL = {
@@ -30,24 +36,12 @@ _DEFAULT_MODEL = {
 }
 _GOOGLE_BASE = "https://generativelanguage.googleapis.com/v1beta/openai/"
 
-_COACH_PERSONA = """\
-你是一位資深 GT3 賽車教練，正在幫車手分析模擬賽車的遙測資料。
-
-你的風格：
-- 具體、可執行：講「煞車點、煞車力道釋放、油門介入時機、走線」，不講空泛話術
-- 依時間價值排優先順序：先講損失最大的彎，一次只給 1-3 個最重要的改進點
-- 用數據佐證：引用遙測摘要中的實際數字（煞車點差幾 %、彎中最低速差幾 km/h、損失幾秒）
-- 區分「進彎損失」與「出彎損失」：進彎損失通常是煞車點/煞車技巧問題，
-  出彎損失通常是 apex 速度過高導致出彎收油、或油門介入太晚——處方完全不同
-- 注意：比較圈在某彎「賺」的時間如果伴隨出口速度損失，往往是犧牲出彎的晚煞——
-  在接長直線的彎這是賠錢生意，要指出來
-- 使用繁體中文，稱呼對方「你」，語氣像 pit wall 上的無線電：直接、簡潔、專業
-
-資料說明：
-- 「A」是參考圈（通常是最快圈），「B」是被比較的圈。損失為正 = B 較慢
-- 賽道位置以 spline %（賽道總長百分比）表示
-- 車手的追問可能指向特定彎道，用賽道知識中的彎名對應遙測摘要中的區段位置\
-"""
+# persona：角色 + 分析方法（CoT-lite）+ 回覆格式契約 + 資料慣例
+# examples：兩則 few-shot 完整範例（比較圈 / 單圈），示範格式與判讀方式
+# report_format：結構化分析報告的 JSON schema 指示（ask_report 用）
+_COACH_PERSONA = _load_prompt("persona")
+_FEWSHOT_EXAMPLES = _load_prompt("examples")
+_REPORT_FORMAT = _load_prompt("report_format")
 
 
 # ---- 供應商 / 模型 / 金鑰 --------------------------------------------------
@@ -104,15 +98,23 @@ def build_context(summary: str, track: str, car: str) -> dict:
                 f"### 遙測比較摘要\n{summary}")
     return {"persona": _COACH_PERSONA,
             "knowledge": _load_knowledge(track),
+            "examples": _FEWSHOT_EXAMPLES,
             "analysis": analysis}
 
 
 def _anthropic_system(context: dict) -> list:
-    """system blocks：穩定內容在前並掛 cache_control，供多輪對話重用。"""
+    """system blocks：穩定內容在前並掛 cache_control，供多輪對話重用。
+
+    順序 persona → knowledge → examples → analysis；cache_control 掛在最後的
+    analysis block，Anthropic 會快取整段前綴，few-shot 範例每組圈只花一次
+    input token，後續輪次近乎免費。
+    """
     blocks = [{"type": "text", "text": context["persona"]}]
     if context.get("knowledge"):
         blocks.append({"type": "text",
                        "text": f"## 賽道知識\n\n{context['knowledge']}"})
+    if context.get("examples"):
+        blocks.append({"type": "text", "text": context["examples"]})
     blocks.append({"type": "text", "text": context["analysis"],
                    "cache_control": {"type": "ephemeral"}})
     return blocks
@@ -123,6 +125,8 @@ def _system_text(context: dict) -> str:
     parts = [context["persona"]]
     if context.get("knowledge"):
         parts.append(f"## 賽道知識\n\n{context['knowledge']}")
+    if context.get("examples"):
+        parts.append(context["examples"])
     parts.append(context["analysis"])
     return "\n\n".join(parts)
 
@@ -182,7 +186,7 @@ def ask_stream(context: dict, messages: list):
 
 def _anthropic_stream(context: dict, messages: list):
     with _anthropic_client().messages.stream(
-        model=get_model(), max_tokens=2048,
+        model=get_model(), max_tokens=3000,   # 格式契約讓回答略長，避免截斷
         system=_anthropic_system(context), messages=messages,
     ) as stream:
         for text in stream.text_stream:
@@ -201,3 +205,49 @@ def _openai_stream(provider: str, context: dict, messages: list):
             delta = chunk.choices[0].delta.content
             if delta:
                 yield delta
+
+
+# ---- 結構化分析報告 --------------------------------------------------------
+
+def ask_report(context: dict) -> tuple[dict | None, str]:
+    """一次性產出結構化報告。回傳 (parsed, raw)：parsed 解析失敗時為 None。
+
+    刻意用 prompt-based JSON + 容錯解析，而非各供應商的 tool-use /
+    response_format——四路（Anthropic/OpenAI/Gemini/local）行為才一致。
+    system 前綴與聊天完全相同，同組圈的 Anthropic prompt cache 可共用。
+    """
+    messages = [{"role": "user", "content": _REPORT_FORMAT}]
+    provider = get_provider()
+    if provider == "anthropic":
+        resp = _anthropic_client().messages.create(
+            model=get_model(), max_tokens=3000,
+            system=_anthropic_system(context), messages=messages)
+        raw = "".join(b.text for b in resp.content if b.type == "text")
+    else:
+        client = _openai_client(provider)
+        resp = client.chat.completions.create(
+            model=get_model(),
+            messages=[{"role": "system", "content": _system_text(context)}]
+                     + messages)
+        raw = resp.choices[0].message.content or ""
+    return parse_report(raw), raw
+
+
+def parse_report(raw: str) -> dict | None:
+    """容錯解析模型輸出的 JSON：剝 code fence、取最外層大括號、驗證形狀。"""
+    import json
+    text = raw.strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[-1]        # 去掉 ```json 首行
+        text = text.rsplit("```", 1)[0]
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end <= start:
+        return None
+    try:
+        data = json.loads(text[start:end + 1])
+    except ValueError:
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("findings"), list):
+        return None
+    data.setdefault("overall", "")
+    return data

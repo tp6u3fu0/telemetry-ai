@@ -61,22 +61,49 @@ def main() -> int:
     if "B 共慢 +1.357" not in ctx["analysis"]:
         failures.append("遙測摘要未進 context")
 
-    # Anthropic system blocks：最後一塊掛 cache_control
+    if "## 範例" not in (ctx.get("examples") or ""):
+        failures.append("few-shot 範例未載入")
+
+    # Anthropic system blocks：persona → knowledge → examples → analysis，
+    # cache_control 掛在最後（快取整段前綴，範例近乎免費）
     blocks = coach._anthropic_system(ctx)
     if "cache_control" not in blocks[-1]:
         failures.append("最後一個 block 應掛 cache_control")
     if "賽車教練" not in blocks[0]["text"]:
         failures.append("blocks persona 遺失")
+    if len(blocks) != 4:
+        failures.append(f"有賽道知識時應為 4 個 blocks，得 {len(blocks)}")
+    if "## 範例" not in blocks[2]["text"]:
+        failures.append("examples 應為第三個 block（knowledge 與 analysis 之間）")
 
-    # OpenAI 相容：單一 system 字串含全部三段
+    # OpenAI 相容：單一 system 字串含全部四段
     sys_text = coach._system_text(ctx)
-    if not all(s in sys_text for s in ("賽車教練", "速度聖殿", "B 共慢 +1.357")):
+    if not all(s in sys_text for s in ("賽車教練", "速度聖殿", "## 範例",
+                                       "B 共慢 +1.357")):
         failures.append("system 字串組裝不完整")
 
     # 未知賽道：知識文件缺席但不噴錯
     ctx2 = coach.build_context("x", "unknown_track", "car")
     if ctx2["knowledge"] is not None:
         failures.append("未知賽道不應載入知識文件")
+    if len(coach._anthropic_system(ctx2)) != 3:
+        failures.append("無賽道知識時應為 3 個 blocks")
+
+    # -- 結構化報告：prompt 載入 + 容錯解析 --
+    if "JSON" not in coach._REPORT_FORMAT:
+        failures.append("report_format 指示未載入")
+    good = '{"overall":"ok","findings":[{"corner":"T1","priority":1}]}'
+    if coach.parse_report(good) is None:
+        failures.append("純 JSON 應可解析")
+    fenced = f"```json\n{good}\n```"
+    if coach.parse_report(fenced) is None:
+        failures.append("code fence 包裹的 JSON 應可解析")
+    chatty = f"好的，以下是報告：\n{good}\n希望有幫助！"
+    if coach.parse_report(chatty) is None:
+        failures.append("前後夾雜文字的 JSON 應可解析")
+    for bad in ("這不是 JSON", '{"overall":"x"}', '{"findings":"not-a-list"}'):
+        if coach.parse_report(bad) is not None:
+            failures.append(f"壞輸入不應解析成功: {bad!r}")
 
     # -- live smoke（僅在有金鑰時） --
     if coach.has_credentials() and os.environ.get("COACH_LIVE_TEST") == "1":

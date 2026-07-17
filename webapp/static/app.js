@@ -16,6 +16,18 @@ function readColors() {
 let COLORS = readColors();
 const SYNC_KEY = "acc-telemetry";
 
+// hex 色 + 透明度 → rgba 字串（圖表填色跟著主題 token 走，不寫死）
+function withAlpha(hex, alpha) {
+  const [r, g, b] = hexToRgb(hex);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+function hexToRgb(hex) {
+  const h = hex.replace("#", "");
+  const n = parseInt(h.length === 3 ? h.replace(/./g, "$&$&") : h, 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
 const $ = (id) => document.getElementById(id);
 let charts = [];
 let currentZones = [];
@@ -542,7 +554,7 @@ function axisOpts(labelSize) {
     grid: { stroke: COLORS.grid, width: 1 },
     ticks: { stroke: COLORS.baseline, width: 1 },
     size: labelSize,
-    font: "11px system-ui",
+    font: "11px Consolas, system-ui",   // 軸標數字用等寬字（timing-screen 語彙）
   };
 }
 
@@ -644,12 +656,14 @@ function renderMap(d, single = false) {
   ctx.lineWidth = 3.5 * devicePixelRatio;
   ctx.lineCap = "round";
   if (single) {
-    // 單圈：以車速著色（淺→深藍）
+    // 單圈：以車速著色（淺→深，端點由 --series-a 衍生，跟著主題變）
     const sMin = Math.min(...d.speed), sMax = Math.max(...d.speed);
+    const lo = hexToRgb(COLORS.a).map((c) => Math.round(c + (255 - c) * 0.62));
+    const hi = hexToRgb(COLORS.a).map((c) => Math.round(c * 0.48));
     const lerp = (a, b, t) => Math.round(a + (b - a) * t);
     for (let i = 1; i < xs.length; i++) {
       const t = sMax > sMin ? (d.speed[i] - sMin) / (sMax - sMin) : 0;
-      ctx.strokeStyle = `rgb(${lerp(158, 16, t)},${lerp(197, 66, t)},${lerp(244, 129, t)})`;
+      ctx.strokeStyle = `rgb(${lerp(lo[0], hi[0], t)},${lerp(lo[1], hi[1], t)},${lerp(lo[2], hi[2], t)})`;
       ctx.beginPath();
       ctx.moveTo(px(i - 1), py(i - 1));
       ctx.lineTo(px(i), py(i));
@@ -800,6 +814,8 @@ async function compareView(a, b) {
   const td = $("tile-delta");
   td.textContent = (d.total_delta_s >= 0 ? "+" : "") + d.total_delta_s.toFixed(3) + "s";
   td.className = "tile-value " + (d.total_delta_s >= 0 ? "loss" : "gain");
+  td.closest(".tile").className =
+    "tile " + (d.total_delta_s >= 0 ? "tile-loss" : "tile-gain");
   const worst = [...d.zones].sort((x, y) => y.time_lost_s - x.time_lost_s)[0];
   $("tile-worst").innerHTML = worst
     ? `${worst.corner ? worst.corner.split(" (")[0] : "#" + worst.index} ` +
@@ -828,6 +844,7 @@ async function singleView(a) {
   const td = $("tile-delta");
   td.textContent = `${d.min_speed} km/h`;
   td.className = "tile-value";
+  td.closest(".tile").className = "tile";   // 單圈模式清掉正負色條
   $("tile-worst").innerHTML = `${d.zones.length} <span class="sub">個</span>`;
 
   lastData = null;
@@ -850,9 +867,9 @@ function buildCharts(d) {
       { label: "速度差 B−A", stroke: COLORS.ink2, width: 1.4,
         value: (u, v) => (v == null ? "-" : (v >= 0 ? "+" : "") + v.toFixed(1)),
         points: { show: false } },
-      { label: "B 較慢", stroke: "transparent", fill: "rgba(230,103,103,0.22)",
+      { label: "B 較慢", stroke: "transparent", fill: withAlpha(COLORS.loss, 0.22),
         value: () => "", points: { show: false } },
-      { label: "B 較快", stroke: "transparent", fill: "rgba(12,163,12,0.22)",
+      { label: "B 較快", stroke: "transparent", fill: withAlpha(COLORS.gain, 0.22),
         value: () => "", points: { show: false } },
     ], [x, sd, sneg, spos]);
   } else {
@@ -887,9 +904,9 @@ function buildCharts(d) {
     { label: "Δt", stroke: COLORS.ink2, width: 1.4,
       value: (u, v) => (v == null ? "-" : (v >= 0 ? "+" : "") + v.toFixed(3) + "s"),
       points: { show: false } },
-    { label: "落後", stroke: "transparent", fill: "rgba(230,103,103,0.18)",
+    { label: "落後", stroke: "transparent", fill: withAlpha(COLORS.loss, 0.18),
       value: () => "", points: { show: false } },
-    { label: "領先", stroke: "transparent", fill: "rgba(12,163,12,0.18)",
+    { label: "領先", stroke: "transparent", fill: withAlpha(COLORS.gain, 0.18),
       value: () => "", points: { show: false } },
   ], [x, d.delta_s, dpos, dneg]);
 
@@ -1119,10 +1136,47 @@ document.addEventListener("keydown", (e) => {
 let coachHistory = [];   // [{role, content}]，切換比較圈時清空
 let coachBusy = false;
 
+// HTML escape：所有進 innerHTML 的 LLM 輸出都必須先過這層
+function escHtml(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+/* 迷你 Markdown 渲染器：persona 已限定教練只用粗體 + bullet list，
+   ~40 行 regex 就夠，不 vendor 函式庫。
+   安全關鍵：先 HTML-escape 再做轉換——LLM 輸出會進 innerHTML。 */
+function mdToHtml(md) {
+  const inline = (s) => escHtml(s)
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  const out = [];
+  let list = null;
+  for (const raw of md.split("\n")) {
+    const line = raw.trimEnd();
+    const li = line.match(/^\s*[-*•] (.*)$/);
+    if (li) {
+      (list ||= []).push(inline(li[1]));
+      continue;
+    }
+    if (list && /^\s+\S/.test(line)) {        // 縮排接續行併回上一個項目
+      list[list.length - 1] += " " + inline(line.trim());
+      continue;
+    }
+    if (list) { out.push(`<ul><li>${list.join("</li><li>")}</li></ul>`); list = null; }
+    const h = line.match(/^#{1,4} (.*)$/);
+    if (h) { out.push(`<div class="md-h">${inline(h[1])}</div>`); continue; }
+    if (line.trim()) out.push(`<p>${inline(line)}</p>`);
+  }
+  if (list) out.push(`<ul><li>${list.join("</li><li>")}</li></ul>`);
+  return out.join("");
+}
+
 function coachAddMsg(role, text, cls = "") {
   const div = document.createElement("div");
   div.className = `coach-msg ${cls || role}`;
-  div.textContent = text;
+  // 教練回覆走 Markdown 渲染；user / error / thinking 維持純文字
+  if (role === "assistant" && !cls) div.innerHTML = mdToHtml(text);
+  else div.textContent = text;
   $("coach-messages").appendChild(div);
   $("coach-messages").scrollTop = $("coach-messages").scrollHeight;
   return div;
@@ -1138,6 +1192,8 @@ function coachGreeting() {
 async function loadChat(a, b) {
   coachCtx = { a, b: b || 0 };
   $("coach-messages").innerHTML = "";
+  $("coach-report").hidden = true;      // 換圈就收掉舊報告（報告不持久化）
+  $("coach-report").innerHTML = "";
   let messages = [];
   try {
     const h = await fetchJSON(`/api/coach/history?a=${a}&b=${b || 0}`);
@@ -1183,7 +1239,7 @@ async function coachSend(text) {
       const { done, value } = await reader.read();
       if (done) break;
       reply += decoder.decode(value, { stream: true });
-      bubble.textContent = reply;
+      bubble.innerHTML = mdToHtml(reply);   // 全量重渲染，2-3K 字無感
       $("coach-messages").scrollTop = $("coach-messages").scrollHeight;
     }
     coachHistory.push({ role: "assistant", content: reply });
@@ -1197,7 +1253,75 @@ async function coachSend(text) {
   }
 }
 
+/* 結構化分析報告：一次性 JSON → 卡片；解析失敗 fallback 為一般訊息 */
+
+async function coachReport() {
+  if (coachBusy) return;
+  coachBusy = true;
+  const btn = $("coach-report-btn");
+  btn.disabled = true;
+  $("coach-send").disabled = true;
+  const box = $("coach-report");
+  box.hidden = false;
+  box.innerHTML = '<div class="rp-loading">報告產生中…（一次性分析，約 10-20 秒）</div>';
+  try {
+    const data = await fetchJSON("/api/coach/report", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ a: coachCtx.a, b: coachCtx.b || null }),
+    });
+    if (data.report) {
+      renderReport(data.report);
+    } else {
+      // 模型沒給出可解析的 JSON → 以一般教練訊息顯示原文
+      box.hidden = true;
+      box.innerHTML = "";
+      coachAddMsg("assistant", data.raw || "（報告內容為空）");
+    }
+  } catch (err) {
+    box.hidden = true;
+    box.innerHTML = "";
+    coachAddMsg("assistant", "報告產生失敗：" + err.message, "error");
+  } finally {
+    coachBusy = false;
+    btn.disabled = false;
+    $("coach-send").disabled = false;
+  }
+}
+
+function renderReport(r) {
+  const box = $("coach-report");
+  const phaseTag = (p) =>
+    p === "entry" ? '<span class="rp-phase entry">進彎</span>'
+    : p === "exit" ? '<span class="rp-phase exit">出彎</span>' : "";
+  const num = (v, digits) =>
+    (v == null || isNaN(Number(v))) ? null : Number(v).toFixed(digits);
+  box.hidden = false;
+  box.innerHTML = `
+    <div class="rp-head">分析報告
+      <button id="coach-report-close" class="mini-btn inline">收合</button></div>
+    ${r.overall ? `<p class="rp-overall">${escHtml(String(r.overall))}</p>` : ""}
+    ${(r.findings || []).map((f) => {
+      const lost = num(f.time_lost_s, 3);
+      const gain = num(f.expected_gain_s, 2);
+      return `<div class="rp-card">
+        <div class="rp-rank">${escHtml(String(f.priority ?? "•"))}</div>
+        <div class="rp-main">
+          <div class="rp-corner">${escHtml(String(f.corner ?? "?"))}${phaseTag(f.phase)}</div>
+          <div class="rp-diag">${escHtml(String(f.diagnosis ?? ""))}</div>
+          <div class="rp-fix">${escHtml(String(f.prescription ?? ""))}</div>
+        </div>
+        <div class="rp-nums">
+          ${lost != null ? `<div class="rp-lost">+${lost}s</div>` : ""}
+          ${gain != null ? `<div class="rp-gain">拿回 ~${gain}s</div>` : ""}
+        </div>
+      </div>`;
+    }).join("")}`;
+  $("coach-report-close").onclick = () => { box.hidden = true; };
+}
+
 function setupCoach() {
+  $("coach-report-btn").onclick = coachReport;
   $("coach-send").onclick = () => {
     const input = $("coach-input");
     coachSend(input.value);

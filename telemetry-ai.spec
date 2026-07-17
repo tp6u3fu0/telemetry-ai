@@ -7,7 +7,8 @@
 
 要點：
   * 入口 webapp/desktop.py（Flask 背景 thread + pywebview WebView2 視窗）
-  * 帶入唯讀資源：webapp/static（前端）、data/tracks（彎道對照表）
+  * 帶入唯讀資源：webapp/static（前端）、data/tracks（彎道對照表）、
+    knowledge（賽道知識）、agent/prompts（教練 persona / few-shot）
   * 排除 matplotlib/tkinter（執行期用不到，省 ~40MB）
   * irsdk 延遲載入，PyInstaller 靜態分析抓不到 → 手動 hidden import
   * pywebview 的 JS 資源與平台後端一併收集
@@ -17,6 +18,8 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 datas = [
     ("webapp/static", "webapp/static"),
     ("data/tracks", "data/tracks"),
+    ("knowledge", "knowledge"),          # 賽道知識（先前漏掉，exe 版教練拿不到）
+    ("agent/prompts", "agent/prompts"),  # persona / few-shot 範例
 ]
 datas += collect_data_files("webview")        # pywebview 內建 JS
 

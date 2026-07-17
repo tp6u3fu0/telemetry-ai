@@ -45,7 +45,10 @@
 <!-- 首頁 -->
 <div id="home-view">
   <header class="home-head">
-    <h1>🏁 SIM RACING TELEMETRY</h1>
+    <div>
+      <div class="home-eyebrow">SIM RACING</div>
+      <h1>TELEMETRY AI</h1>
+    </div>
     <button id="settings-btn" class="icon-btn" title="設定">⚙</button>
   </header>
   <div class="home-actions">
@@ -235,7 +238,9 @@
       <div class="tab-panel" data-panel="coach">
         <section class="chart-card coach-card">
           <h2>AI 教練 <span class="unit" id="coach-subtitle">基於目前的遙測分析</span>
-            <button id="coach-clear" class="mini-btn inline">清除對話</button></h2>
+            <button id="coach-clear" class="mini-btn inline">清除對話</button>
+            <button id="coach-report-btn" class="mini-btn inline">產生分析報告</button></h2>
+          <div id="coach-report" class="coach-report" hidden></div>
           <div id="coach-messages" class="coach-messages"></div>
           <div class="coach-quick" id="coach-quick">
             <button class="mini-btn quick-q">這圈哪裡可以更快？</button>

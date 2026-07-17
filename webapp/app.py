@@ -266,6 +266,47 @@ def api_coach():
                     mimetype="text/plain; charset=utf-8")
 
 
+@app.post("/api/coach/report")
+def api_coach_report():
+    """結構化分析報告。body: {a, b?}。一次性回傳 JSON（非串流）。
+
+    解析失敗時回 {report: null, raw: 全文}，前端以一般訊息顯示 fallback。
+    """
+    if not coach.has_credentials():
+        return jsonify({"error": "尚未設定 AI 教練的 API 金鑰。"
+                                 "點左上角 ⚙ 設定即可，不需重啟。"}), 503
+    body = request.get_json(silent=True) or {}
+    lap_a, lap_b = body.get("a"), body.get("b")
+    if not lap_a:
+        return jsonify({"error": "需要 a"}), 400
+
+    db = _db()
+    try:
+        try:
+            if lap_b:
+                comp, corner_names, session = _compare_with_context(db, lap_a, lap_b)
+                summary = summarize(comp, corner_names)
+            else:
+                analysis, corner_names, session = _single_with_context(db, lap_a)
+                summary = summarize_single(analysis, corner_names)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        context = coach.build_context(
+            summary=summary,
+            track=session["track"] if session else "",
+            car=session["car_model"] if session else "",
+        )
+    finally:
+        db.close()
+
+    try:
+        report, raw = coach.ask_report(context)
+    except Exception as exc:                          # noqa: BLE001
+        msg = str(exc) or exc.__class__.__name__
+        return jsonify({"error": f"報告產生失敗：{msg[:200]}"}), 502
+    return jsonify({"report": report, "raw": raw})
+
+
 @app.get("/api/coach/history")
 def api_coach_history():
     lap_a = request.args.get("a", type=int)

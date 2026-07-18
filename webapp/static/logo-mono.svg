@@ -1,6 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Telemetry AI">
   <title>Telemetry AI</title>
-  <desc>Δ 單色版：去色後仍成立，stroke 使用 currentColor 可繼承任意文字顏色</desc>
-  <path d="M12 50 L32 14 L52 50 Z" fill="none" stroke="currentColor" stroke-width="7"
-        stroke-linecap="round" stroke-linejoin="round"/>
+  <desc>Δ 單色版：斜體 T 被一道對角細縫切分，stroke 使用 currentColor 可繼承任意文字顏色</desc>
+  <clipPath id="tmarkm">
+    <polygon points="16.17,14 56.17,14 53.63,25 38.63,25 31.93,54 21.93,54 28.63,25 13.63,25"/>
+  </clipPath>
+  <g clip-path="url(#tmarkm)" fill="currentColor">
+    <polygon points="47.35,6 -10,6 -10,66 9.85,66"/>
+    <polygon points="49.15,6 70,6 70,66 11.65,66"/>
+  </g>
 </svg>

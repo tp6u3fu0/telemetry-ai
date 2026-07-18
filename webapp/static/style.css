@@ -33,8 +33,11 @@
   --b-tint: color-mix(in srgb, var(--series-b) 14%, transparent);
   --loss-tint: color-mix(in srgb, var(--loss) 12%, transparent);
   --gain-tint: color-mix(in srgb, var(--gain) 12%, transparent);
-  /* A/B 雙色條紋：全 app 視覺簽名（左 A 右 B） */
-  --stripe: linear-gradient(90deg, var(--series-a) 0 50%, var(--series-b) 50% 100%);
+  /* A/B 雙色條紋：全 app 視覺簽名（左 A 右 B）——中央透明切口呼應 logo 斜切 */
+  --stripe: linear-gradient(90deg, var(--series-a) 0 47%, transparent 47% 53%, var(--series-b) 53% 100%);
+  /* logo 斜切角：22×14 ≈ 32°，與 logo slash 同角度（大元件用大、按鈕用小） */
+  --cut: polygon(0 0, calc(100% - 22px) 0, 100% 14px, 100% 100%, 0 100%);
+  --cut-sm: polygon(0 0, calc(100% - 13px) 0, 100% 9px, 100% 100%, 0 100%);
   /* 底紋網格線（timing-screen 質感，鋪在 --page 上） */
   --grid-line: rgba(255, 255, 255, 0.022);
   /* 字體：display = 計時螢幕識別（標題/圈速/KPI）；numeric = 等寬即時數字 */
@@ -91,12 +94,17 @@ body {
 .home-actions {
   display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 28px;
 }
+/* 主行動卡：斜切右上角 = 稜角語言（唯一大膽處），頂緣掛 A/B 條紋 */
 .action-card {
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: 12px; padding: 20px;
-  transition: border-color 0.15s;
+  background: var(--surface); padding: 20px;
+  position: relative; clip-path: var(--cut);
+  transition: background 0.15s ease-out;
 }
-.action-card:hover { border-color: var(--baseline); }
+.action-card:hover { background: var(--surface-2); }
+.action-card::before {
+  content: ""; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+  background: var(--stripe);
+}
 .action-card-title {
   font-size: 13px; color: var(--ink-2); margin-bottom: 12px; font-weight: 600;
   display: flex; justify-content: space-between; align-items: center;
@@ -121,10 +129,10 @@ body {
   text-transform: uppercase; margin: 0 0 10px;
   display: flex; align-items: center; gap: 8px;
 }
-/* 節首小勾線：簽名條紋的迷你版 */
+/* 節首標記：迷你 logo（斜切 T），標題與品牌直接對上 */
 .home-sec h2::before {
-  content: ""; width: 14px; height: 3px; border-radius: 2px;
-  background: var(--stripe); flex: none;
+  content: ""; width: 15px; height: 15px; flex: none;
+  background: url("logo.svg") left center/contain no-repeat;
 }
 
 /* 個人最佳 */
@@ -416,7 +424,7 @@ select {
 /* ---- 錄製控制 ---- */
 .record-block { margin-bottom: 6px; }
 .record-btn {
-  width: 100%; padding: 9px 10px; border-radius: 8px;
+  width: 100%; padding: 9px 10px; clip-path: var(--cut-sm);
   border: 1px solid var(--border); cursor: pointer;
   background: var(--surface-2); color: var(--ink);
   font-size: 13px; font-weight: 600;
@@ -791,8 +799,8 @@ table.zones {
   margin-bottom: 8px; display: flex; align-items: center; gap: 8px;
 }
 .rp-head::before {
-  content: ""; width: 14px; height: 3px; border-radius: 2px;
-  background: var(--stripe); flex: none;
+  content: ""; width: 15px; height: 15px; flex: none;
+  background: url("logo.svg") left center/contain no-repeat;
 }
 .rp-overall { font-size: 13px; color: var(--ink); margin: 0 0 10px; line-height: 1.6; }
 .rp-card {
